@@ -67,6 +67,9 @@ MEMORY_TOP_K: int = int(os.environ.get("MEMORY_TOP_K", "5"))
 # Resume path for job search features (optional)
 RESUME_PATH: str = os.environ.get("RESUME_PATH", "")
 
+# Your first name — used to personalize the bot's greetings and memory context
+USER_NAME: str = os.environ.get("USER_NAME", "")
+
 # Job search / email pipeline personalization
 USER_FULL_NAME: str = os.environ.get("USER_FULL_NAME", "Your Name")
 USER_BACKGROUND: str = os.environ.get("USER_BACKGROUND", "Software engineer with experience building production systems.")

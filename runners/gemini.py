@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 import tempfile
 from typing import Callable, Awaitable
 
@@ -48,14 +47,7 @@ class GeminiRunner(RunnerBase):
         return False
 
     async def kill_all(self) -> int:
-        try:
-            result = subprocess.run(
-                ["pkill", "-9", "-f", "gemini -p"],
-                capture_output=True, timeout=5,
-            )
-            return 1 if result.returncode == 0 else 0
-        except Exception:
-            return 0
+        return self._kill_processes("gemini -p")
 
     async def run_query(self, prompt: str, timeout: int = 120) -> str:
         """Stateless one-shot query via gemini CLI."""

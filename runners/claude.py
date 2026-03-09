@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 import uuid
 from typing import Callable, Awaitable
 
@@ -49,14 +48,7 @@ class ClaudeRunner(RunnerBase):
         return False
 
     async def kill_all(self) -> int:
-        try:
-            result = subprocess.run(
-                ["pkill", "-9", "-f", "claude -p"],
-                capture_output=True, timeout=5,
-            )
-            return 1 if result.returncode == 0 else 0
-        except Exception:
-            return 0
+        return self._kill_processes("claude -p")
 
     async def run_query(self, prompt: str, timeout: int = 120) -> str:
         """Stateless one-shot query. No session, no memory, no progress."""

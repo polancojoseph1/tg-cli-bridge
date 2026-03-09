@@ -3985,16 +3985,11 @@ async def webhook(request: Request):
         )))
         return JSONResponse({"ok": True})
 
-    # Document upload -- save to user's designated folder
+    # Document upload -- save to uploads folder inside memory dir
     if document:
         file_id = document["file_id"]
         file_name = document.get("file_name", f"file_{file_id[:8]}")
-        # Per-user upload directory: check USER_NAMES for custom folder, else default
-        user_name = USER_NAMES.get(user_id, "")
-        if user_name and user_id != ALLOWED_USER_ID:
-            save_dir = os.path.expanduser(f"~/Desktop/{user_name}")
-        else:
-            save_dir = os.path.join(MEMORY_DIR, "uploads")
+        save_dir = os.path.join(MEMORY_DIR, "uploads")
         dest_path = os.path.join(save_dir, file_name)
         health.record_message()
         asyncio.create_task(_handle_document_upload(chat_id, file_id, dest_path, file_name))
@@ -4156,7 +4151,7 @@ def _context_footer(inst) -> str:
 _IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff'}
 _VIDEO_EXTS = {'.mp4', '.mov', '.mkv', '.webm', '.avi'}
 _MEDIA_PATH_RE = re.compile(
-    r'((?:/|~/)[^\s"\'`\)\]>]+\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|mp4|mov|mkv|webm|avi))',
+    r'((?:[A-Za-z]:[/\\]|[/\\]{2}|/|~/)[^\s"\'`\)\]>]+\.(?:png|jpg|jpeg|gif|webp|bmp|tiff|mp4|mov|mkv|webm|avi))',
     re.IGNORECASE,
 )
 

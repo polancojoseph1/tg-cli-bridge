@@ -9,7 +9,9 @@ and provides a uniform interface for:
 """
 
 from abc import ABC, abstractmethod
+import platform
 import shutil
+import subprocess
 from typing import Callable, Awaitable, Any
 
 
@@ -94,6 +96,31 @@ class RunnerBase(ABC):
         Returns count killed (0 or 1).
         """
         return 0
+
+    @staticmethod
+    def _kill_processes(pattern: str) -> int:
+        """Kill processes matching pattern. Cross-platform (Windows + Unix).
+
+        On Windows: uses taskkill /F /IM <pattern.exe>
+        On Unix: uses pkill -9 -f <pattern>
+        Returns 1 if any were killed, 0 otherwise.
+        """
+        try:
+            if platform.system() == "Windows":
+                # Ensure .exe suffix for taskkill
+                exe = pattern if pattern.endswith(".exe") else f"{pattern.split()[0]}.exe"
+                result = subprocess.run(
+                    ["taskkill", "/F", "/IM", exe],
+                    capture_output=True, timeout=5,
+                )
+            else:
+                result = subprocess.run(
+                    ["pkill", "-9", "-f", pattern],
+                    capture_output=True, timeout=5,
+                )
+            return 1 if result.returncode == 0 else 0
+        except Exception:
+            return 0
 
     def format_tool_progress(self, name: str, params: dict) -> str:
         """Format a tool call into a human-readable progress string.

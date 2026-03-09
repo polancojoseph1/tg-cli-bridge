@@ -295,6 +295,10 @@ def show_dashboard(existing: dict):
     else:
         uid_display = "not set  <-- required"
 
+    # 2b. Name
+    user_name = existing.get("USER_NAME", "")
+    name_display = user_name if user_name else "not set (optional)"
+
     # 3. CLI
     runner = existing.get("CLI_RUNNER", "")
     if runner and runner in CLI_OPTIONS:
@@ -354,6 +358,7 @@ def show_dashboard(existing: dict):
     print()
     print(f"  1. Telegram Bot Token    -- {token_display}")
     print(f"  2. Your Telegram User ID -- {uid_display}")
+    print(f"  2b. Your Name            -- {name_display}")
     print(f"  3. AI CLI                -- {cli_display}")
     print("  " + "-" * 44)
     print(f"  4. Server (host, port)   -- {server_display}")
@@ -417,6 +422,33 @@ def step_bot_token(existing: dict):
         save_value("TELEGRAM_BOT_TOKEN", token)
         existing["TELEGRAM_BOT_TOKEN"] = token
         print()
+
+
+# ---------------------------------------------------------------------------
+# Step 1b: Your Name
+# ---------------------------------------------------------------------------
+
+def step_user_name(existing: dict):
+    print()
+    print("=" * 46)
+    print("  What's your name?")
+    print("=" * 46)
+    print()
+    print("  The bot will use your name to personalize its")
+    print("  memory and greetings. Just your first name is fine.")
+    print()
+
+    current = existing.get("USER_NAME", "")
+    if current:
+        print(f"  Current name: {current}")
+        print("  Press Enter to keep it, or type a new one.")
+        print()
+
+    name = prompt_value("Your first name", existing=current)
+    if name:
+        save_value("USER_NAME", name)
+        existing["USER_NAME"] = name
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -936,6 +968,9 @@ def _main():
         existing = load_existing()
 
         step_user_id(existing)
+        existing = load_existing()
+
+        step_user_name(existing)
         existing = load_existing()
 
         step_cli_runner(existing)

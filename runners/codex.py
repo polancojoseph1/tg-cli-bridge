@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import shutil
-import subprocess
 from datetime import date
 from typing import Callable, Awaitable
 
@@ -48,14 +47,7 @@ class CodexRunner(RunnerBase):
         return False
 
     async def kill_all(self) -> int:
-        try:
-            result = subprocess.run(
-                ["pkill", "-9", "-f", "codex exec"],
-                capture_output=True, timeout=5,
-            )
-            return 1 if result.returncode == 0 else 0
-        except Exception:
-            return 0
+        return self._kill_processes("codex exec")
 
     async def run_query(self, prompt: str, timeout: int = 120) -> str:
         """Stateless one-shot query via codex CLI."""
@@ -130,7 +122,11 @@ class CodexRunner(RunnerBase):
 
         if item_type == "command_execution":
             cmd = item.get("command", "")
-            for prefix in ("/bin/zsh -lc '", '/bin/zsh -lc "', "/bin/sh -lc '", '/bin/sh -lc "'):
+            for prefix in (
+                "/bin/zsh -lc '", '/bin/zsh -lc "',
+                "/bin/sh -lc '", '/bin/sh -lc "',
+                "cmd /c \"", "cmd /c '",
+            ):
                 if cmd.startswith(prefix):
                     cmd = cmd[len(prefix):]
                     if cmd.endswith("'") or cmd.endswith('"'):
@@ -248,7 +244,8 @@ class CodexRunner(RunnerBase):
             "-c", "shell_environment_policy.inherit=all",
         ]
 
-        init_flags = ["-C", os.path.expanduser("~/Desktop")] + base_flags
+        from pathlib import Path
+        init_flags = ["-C", str(Path.home())] + base_flags
 
         if thread_id:
             cmd = [binary, "exec", "resume", thread_id, full_prompt] + base_flags
