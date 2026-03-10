@@ -241,6 +241,10 @@ async def lifespan(application: FastAPI):
     else:
         logger.warning("claude CLI NOT found in PATH -- commands will fail")
     health.init()
+    if research_handler:
+        research_handler.init(runner)
+    if task_orchestrator:
+        task_orchestrator.init(runner)
     if WEBHOOK_URL:
         await register_webhook(WEBHOOK_URL)
         logger.info("Webhook registered from WEBHOOK_URL env")

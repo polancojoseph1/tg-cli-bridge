@@ -5,12 +5,26 @@ httpx>=0.24.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 
-# Optional: Vector memory (ChromaDB)
+# Optional: Vector memory — enables /remember, /memory, and context injection before each AI call
 # chromadb>=0.4.0
 
-# Optional: Voice messages
+# Optional: Voice messages — enables voice note transcription and TTS replies
 # faster-whisper>=0.7.0
-# edge-tts>=6.0.0
+# edge-tts>=6.1.0
 
-# Optional: Knowledge graph (agent memory)
+# Optional: Screen recording — enables /record and /stoprecord (macOS only)
+# Pillow>=10.0.0
+
+# Optional: Group voice chat — enables /call and /endcall (requires Pyrogram userbot setup)
+# pyrogram>=2.0.0
+# pytgcalls>=0.9.0
+
+# Optional: Knowledge graph agent memory
 # kuzu>=0.1.0
+
+# Optional: Company research — enables /research and /objective (SEC EDGAR, USASpending, news)
+# (no extra pip deps — uses stdlib urllib + httpx which is already a core dep)
+
+# System dependencies (install separately):
+#   ffmpeg       — required for voice messages and /call audio conversion
+#   cloudflared  — or ngrok, for exposing local server to Telegram webhook

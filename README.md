@@ -55,7 +55,7 @@ python -m uvicorn server:app --host 0.0.0.0 --port 8585
 
 Or just press `r` in the setup wizard to launch directly.
 
-### 5. Expose to the internet
+### 4. Expose to the internet
 
 The bot needs a public URL for Telegram webhooks. Use any tunneling tool:
 
@@ -78,7 +78,13 @@ Set the `WEBHOOK_URL` in your `.env` to the public URL, or the bot will auto-reg
 - **Image generation** — Generate images with `/imagine` (requires Gemini API key)
 - **Vector memory** — ChromaDB-powered conversation memory with `/remember` (requires `chromadb`)
 - **Task tracking** — Shared todo list with `/task add` and `/task done`
-- **Agent system** — Named specialist agents with custom system prompts
+- **Agent system** — Named specialist agents with custom system prompts and skill packs
+- **Specialist agents** — Create domain-specific agents and talk to them directly
+- **Task orchestration** — Break complex tasks into parallel sub-agents with `/orch`
+- **Proactive agents** — Schedule agents to run recurring tasks on a cron-like schedule
+- **Company research** — SEC filings, government contracts, and news synthesis with `/research`
+- **Screen recording** — Capture and send screen recordings with `/record` (macOS)
+- **Group voice chat** — Join Telegram group voice chat with `/call` (requires Pyrogram setup)
 - **Smart routing** — Ollama-based message routing across instances (requires local Ollama)
 - **Live tool updates** — See what tools the AI is using in real-time
 
@@ -94,11 +100,40 @@ Set the `WEBHOOK_URL` in your `.env` to the public URL, or the bot will auto-reg
 | `/voice` | Toggle voice replies |
 | `/model <name>` | Switch model (Claude only) |
 | `/remember <text>` | Save to memory |
+| `/memory <query>` | Search memory |
 | `/task add <text>` | Add a task |
 | `/task list` | Show tasks |
 | `/task done <n>` | Complete task |
 | `/imagine <prompt>` | Generate an image |
+| `/chrome` | Toggle Chrome browser integration (Claude only) |
 | `/status` | Show bot status |
+| `/server` | Restart the server |
+| **Agents** | |
+| `/agent create <type> <name>` | Create a specialist agent |
+| `/agent list` | Show all agents |
+| `/agent talk <name>` | Switch to an agent instance |
+| `/agent task <name> <task>` | Assign a one-off task to an agent |
+| `/agent proactive <name> set <HH:MM> <task>` | Schedule a recurring agent task |
+| `/agent proactive start` | Start the proactive worker |
+| `/agent proactive stop` | Stop the proactive worker |
+| `/agent proactive status` | Show scheduled tasks |
+| **Research** | |
+| `/research <company>` | Company intel: SEC filings, contracts, news |
+| `/objective <goal>` | Who is pursuing a goal + what each company is doing |
+| **Orchestration** | |
+| `/orch <task>` | Break task into parallel agents, synthesize results |
+| **Multi-instance** | |
+| `/claude new <title>` | Start a new named Claude instance |
+| `/claude list` | Show all instances |
+| `/claude switch <id or title>` | Switch active instance |
+| `/claude rename <id> <title>` | Rename an instance |
+| `/claude end <id>` | Close an instance |
+| **Voice chat** | |
+| `/call` | Join Telegram group voice chat |
+| `/endcall` | Leave voice chat |
+| **Screen** | |
+| `/record` | Start screen recording (macOS only) |
+| `/stoprecord` | Stop and send recording |
 
 ## Configuration
 
@@ -113,6 +148,26 @@ All settings are in `.env`. See [`.env.example`](.env.example) for the full list
 - `MEMORY_ENABLED=true` — ChromaDB vector memory
 - `GEMINI_API_KEY` — For image generation
 - `CHROME_ENABLED=true` — Chrome browser extension (Claude only)
+- `EDGAR_CONTACT` — Email for SEC EDGAR User-Agent (e.g. `research@example.com`)
+- `TIMEZONE` — Timezone for scheduler (e.g. `America/New_York`)
+- `TASK_TIMEOUT` — Max seconds per scheduled task (default: `300`)
+
+## Optional Features Guide
+
+Some features require additional modules and/or Python packages. All optional modules use graceful `try/except ImportError` — the server starts without them.
+
+| Feature | Module | pip packages | System deps |
+|---------|--------|-------------|-------------|
+| Vector memory | `memory_handler.py` | `chromadb` | — |
+| Voice transcription | `voice_handler.py` | `faster-whisper`, `edge-tts` | `ffmpeg` |
+| Screen recording | `screen_recorder.py` | `Pillow` | macOS only |
+| Group voice chat | `call_handler.py` | `pyrogram`, `pytgcalls` | `ffmpeg`, Pyrogram userbot session |
+| Company research | `research_handler.py` | — (uses `httpx`, already core) | — |
+| Task orchestration | `task_orchestrator.py` | — | — |
+| Proactive agents | `proactive_worker.py` | — | — |
+| Background scheduler | `scheduler.py` | — | — |
+
+To install optional packages, uncomment the relevant lines in `requirements.txt` and run `pip install -r requirements.txt`.
 
 ## Architecture
 
@@ -132,7 +187,23 @@ tg-cli-bridge/
 ├── voice_handler.py       # Whisper + Edge TTS
 ├── memory_handler.py      # ChromaDB vector memory
 ├── health.py              # Uptime tracking
+├── agent_registry.py      # Agent definitions and storage
+├── agent_manager.py       # Agent lifecycle management
+├── agent_skills.py        # Skill packs for agents
+├── agent_memory.py        # Per-agent memory
+├── router.py              # Ollama-based message router
+├── task_handler.py        # Shared task list
+├── image_handler.py       # Gemini image generation
+├── health.py              # Uptime + message tracking
 └── .env.example           # Config template
+
+Optional modules (auto-detected at startup):
+├── research_handler.py    # /research + /objective — SEC, contracts, news
+├── task_orchestrator.py   # /orch — parallel sub-agent decomposition
+├── proactive_worker.py    # /agent proactive — scheduled recurring tasks
+├── scheduler.py           # Background file-based task scheduler
+├── screen_recorder.py     # /record — macOS screen capture
+└── call_handler.py        # /call — Pyrogram group voice chat
 ```
 
 Each runner adapter handles:
@@ -149,6 +220,10 @@ Each runner adapter handles:
 4. Set `CLI_RUNNER=my_cli` in `.env`
 
 See [`runners/generic.py`](runners/generic.py) for a minimal example.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, how to add runners and optional modules, and the PR checklist.
 
 ## License
 

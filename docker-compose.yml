@@ -1,0 +1,15 @@
+services:
+  tg-cli-bridge:
+    build: .
+    ports:
+      - "8585:8585"
+    env_file:
+      - .env
+    environment:
+      - MEMORY_DIR=/memories
+    volumes:
+      - memories:/memories
+    restart: unless-stopped
+
+volumes:
+  memories:
