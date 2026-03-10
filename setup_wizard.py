@@ -856,6 +856,9 @@ def run_bot(existing: dict):
                 return
 
     webhook = existing.get("WEBHOOK_URL", "")
+    # Quick tunnels (trycloudflare.com) are ephemeral — always start a fresh one
+    if "trycloudflare.com" in webhook:
+        webhook = ""
     need_tunnel = not webhook
 
     if need_tunnel and not shutil.which("cloudflared"):
@@ -984,7 +987,7 @@ def _start_cloudflared_tunnel(port: str, existing: dict) -> str | None:
         result = resp.json()
         if result.get("ok"):
             print("    Webhook registered!")
-            save_value("WEBHOOK_URL", webhook_url)
+            # Don't persist ephemeral trycloudflare.com URLs to .env
             existing["WEBHOOK_URL"] = webhook_url
         else:
             print(f"    Webhook registration failed: {result.get('description')}")
