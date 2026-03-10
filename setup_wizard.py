@@ -857,24 +857,20 @@ def run_bot(existing: dict):
 
     webhook = existing.get("WEBHOOK_URL", "")
     if not webhook:
-        print()
-        print("    No webhook URL is set — Telegram needs a public URL to reach your bot.")
-        print()
         if shutil.which("cloudflared"):
-            if prompt_yes_no("  Start a cloudflared tunnel automatically?", default=True):
-                webhook = _start_cloudflared_tunnel(port, existing)
-                if not webhook:
-                    print("    Could not start tunnel.")
-                    if not prompt_yes_no("  Start bot without a tunnel?", default=False):
-                        return
+            print()
+            print("    No webhook URL set — starting cloudflared tunnel automatically...")
+            webhook = _start_cloudflared_tunnel(port, existing)
+            if not webhook:
+                print("    Could not start tunnel. Run 'brew install cloudflared' and try again.")
+                return
         else:
-            print("    Install cloudflared to set up a tunnel automatically:")
-            print("      brew install cloudflared")
+            print()
+            print("    No webhook URL is set and cloudflared is not installed.")
+            print("    Install it first:  brew install cloudflared")
             print(f"    Or run in another terminal:  ngrok http {port}")
             print("    Then set WEBHOOK_URL via menu option 4 and press r again.")
-            print()
-            if not prompt_yes_no("  Start bot without a tunnel?", default=False):
-                return
+            return
 
     print()
     print(f"    Starting tg-cli-bridge on {host}:{port}...")
