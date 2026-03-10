@@ -934,13 +934,15 @@ def _start_cloudflared_tunnel(port: str, existing: dict) -> str | None:
         return None
 
     url = None
-    deadline = time.time() + 25
+    deadline = time.time() + 30
     for line in proc.stdout:
         if time.time() > deadline:
             break
-        m = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', line)
+        # Strip ANSI escape codes before matching
+        clean = re.sub(r'\x1b\[[0-9;]*m', '', line)
+        m = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', clean)
         if m:
-            url = m.group(0)
+            url = m.group(0).strip()
             break
 
     if not url:
@@ -949,6 +951,8 @@ def _start_cloudflared_tunnel(port: str, existing: dict) -> str | None:
         return None
 
     print(f"    Tunnel: {url}")
+    print("    Waiting for tunnel to go live...")
+    time.sleep(3)
 
     # Register webhook with Telegram
     webhook_url = f"{url}/webhook"
