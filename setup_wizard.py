@@ -856,44 +856,51 @@ def run_bot(existing: dict):
                 return
 
     webhook = existing.get("WEBHOOK_URL", "")
-    if not webhook:
-        if shutil.which("cloudflared"):
-            print()
-            print("    Starting cloudflared tunnel automatically...")
-            webhook = _start_cloudflared_tunnel(port, existing)
-            if not webhook:
-                print("    Could not start tunnel. Run 'brew install cloudflared' and try again.")
-                return
-        else:
-            print()
-            print("    No webhook URL is set and cloudflared is not installed.")
-            print("    Install it first:  brew install cloudflared")
-            print(f"    Or run in another terminal:  ngrok http {port}")
-            print("    Then set WEBHOOK_URL via menu option 4 and press r again.")
-            return
+    need_tunnel = not webhook
 
-    print()
-    print(f"    Starting tg-cli-bridge on {host}:{port}...")
-    print("    Press Ctrl+C to stop.")
-    print()
+    if need_tunnel and not shutil.which("cloudflared"):
+        print()
+        print("    No webhook URL is set and cloudflared is not installed.")
+        print("    Install it first:  brew install cloudflared")
+        print(f"    Or run in another terminal:  ngrok http {port}")
+        print("    Then set WEBHOOK_URL via menu option 4 and press r again.")
+        return
 
     # Kill any existing process on the port so uvicorn can bind
     _free_port(int(port))
 
     env = dict(os.environ)
-    webhook = existing.get("WEBHOOK_URL", "")
     if webhook:
         env["WEBHOOK_URL"] = webhook
 
+    print()
+    print(f"    Starting tg-cli-bridge on {host}:{port}...")
+    if need_tunnel:
+        print("    (cloudflared tunnel will start once server is up)")
+    print("    Press Ctrl+C to stop.")
+    print()
+
+    # Start uvicorn first so the server is live when Telegram verifies the webhook
+    server_proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "server:app",
+         "--host", host, "--port", port],
+        cwd=str(PROJECT_DIR),
+        env=env,
+    )
+
     try:
-        subprocess.run(
-            [sys.executable, "-m", "uvicorn", "server:app",
-             "--host", host, "--port", port],
-            cwd=str(PROJECT_DIR),
-            env=env,
-        )
+        if need_tunnel:
+            import time as _t
+            _t.sleep(2)  # Give uvicorn a moment to bind
+            _start_cloudflared_tunnel(port, existing)
+        server_proc.wait()
     except KeyboardInterrupt:
         print("\n\n    Bot stopped.\n")
+        server_proc.terminate()
+        try:
+            server_proc.wait(timeout=3)
+        except Exception:
+            server_proc.kill()
 
 
 def _free_port(port: int) -> None:
@@ -951,8 +958,19 @@ def _start_cloudflared_tunnel(port: str, existing: dict) -> str | None:
         return None
 
     print(f"    Tunnel: {url}")
-    print("    Waiting for tunnel to go live...")
-    time.sleep(3)
+    print("    Waiting for tunnel DNS to propagate...", end="", flush=True)
+    # Poll /health through the tunnel until Telegram can reach it (max 30s)
+    import httpx as _httpx
+    for _ in range(10):
+        time.sleep(3)
+        print(".", end="", flush=True)
+        try:
+            r = _httpx.get(f"{url}/health", timeout=5)
+            if r.status_code < 500:
+                break
+        except Exception:
+            pass
+    print()
 
     # Register webhook with Telegram
     webhook_url = f"{url}/webhook"
