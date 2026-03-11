@@ -476,19 +476,43 @@ async def lifespan(application: FastAPI):
         asyncio.create_task(_run_polling())
 
     await register_bot_commands([
+        # Core
         ("help",      "Show available commands"),
-        ("new",       "Start a new conversation"),
+        ("status",    "Show server status & queue depth"),
+        
+        # Session Management
+        ("new",       "Reset conversation & start fresh"),
         ("stop",      "Stop current task & clear queue"),
-        ("status",    "Show server status"),
-        ("task",      "View/manage task list"),
-        ("remember",  "Save something to memory"),
-        ("memory",    "Memory stats & re-index"),
-        ("imagine",   "Generate an image"),
-        ("research",  "Company intel: vendors, contracts, forecast"),
-        ("voice",     "Toggle voice replies"),
-        ("server",    "Restart the bridge server"),
         ("kill",      "Force-kill all AI processes"),
+        
+        # Instances (Multi-session)
+        ("inst",      "Manage instances: new/list/switch/rename/end"),
+        
+        # Agents
+        ("agent",     "Manage specialist agents: list/create/talk/fix/feedback"),
+        ("orch",      "Break task into parallel agents, synthesize results"),
+        
+        # Research & Intel
+        ("research",  "Company intel: vendors, contracts, SEC filings, forecast"),
+        ("objective", "Find companies pursuing a goal + what they're doing"),
+        
+        # Memory & Tasks
+        ("remember",  "Save something to memory"),
+        ("memory",    "Memory stats & re-index files"),
+        ("task",      "View/manage task list: add/done/list"),
+        
+        # Media & Voice
+        ("imagine",   "Generate an image from prompt"),
+        ("voice",     "Toggle voice replies mode"),
+        ("call",      "Join group voice chat"),
+        ("endcall",   "Leave group voice chat"),
+        
+        # Browser & Tools
         ("chrome",    "Toggle Chrome browser integration"),
+        ("model",     "Switch AI model: sonnet|opus|haiku"),
+        
+        # System
+        ("server",    "Restart the bridge server"),
     ])
 
     # Crash detection: if shutdown_clean flag is absent, the last run crashed
