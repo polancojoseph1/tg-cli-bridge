@@ -223,6 +223,11 @@ class ClaudeRunner(RunnerBase):
                                 progress = self.format_tool_progress(tool_name, tool_inp)
                                 if progress:
                                     await on_progress(progress)
+                        elif block_type == "thinking" and on_progress:
+                            thought = block.get("thinking", "").strip()
+                            if thought:
+                                brief = thought.splitlines()[0][:120]
+                                await on_progress(f"\U0001f4ad {brief}")
                         elif block_type == "text":
                             text = block.get("text", "")
                             if text:

@@ -135,7 +135,7 @@ class CodexRunner(RunnerBase):
             cmd = cmd.strip()
             if not cmd:
                 return "\u26a1 Running command..."
-            return f"\u26a1 {cmd[:200]}"
+            return f"\u26a1 {cmd[:120]}"
 
         if item_type == "function_call":
             name = item.get("name", "")
@@ -150,7 +150,7 @@ class CodexRunner(RunnerBase):
 
             if name in ("shell", "bash", "exec_command"):
                 cmd = args_dict.get("command", args_dict.get("cmd", ""))
-                return f"\u26a1 {cmd[:200]}" if cmd else "\u26a1 Shell"
+                return f"\u26a1 {cmd[:120]}" if cmd else "\u26a1 Shell"
             elif name in ("write_file", "apply_patch"):
                 return f"\U0001f4dd Write: {args_dict.get('path', '')}"
             elif name == "read_file":
@@ -163,7 +163,14 @@ class CodexRunner(RunnerBase):
                 return f"\U0001f527 {name}"
 
         if item_type == "reasoning":
-            return ""
+            # Surface first line of reasoning as a brief thought bubble
+            summary = item.get("summary", [])
+            if summary:
+                text = " ".join(s.get("text", "") for s in summary if isinstance(s, dict)).strip()
+            else:
+                text = item.get("text", "").strip()
+            brief = text.splitlines()[0][:120] if text else ""
+            return f"\U0001f4ad {brief}" if brief else ""
 
         return ""
 
@@ -344,6 +351,7 @@ class CodexRunner(RunnerBase):
             instance.session_started = True
             if captured_thread_id:
                 instance.adapter_data["thread_id"] = captured_thread_id
+                instance.session_id = captured_thread_id  # mirror into session_id for crash recovery
             if _usage["input"] or _usage["output"]:
                 instance.last_input_tokens = _usage["input"]
                 instance.last_output_tokens = _usage["output"]

@@ -134,11 +134,11 @@ class RunnerBase(ABC):
             return f"\u270f\ufe0f Edit: {params.get('file_path', '')}"
         elif name in ("Write", "write_file", "write_new_file", "apply_patch"):
             return f"\U0001f4dd Write: {params.get('file_path', params.get('path', ''))}"
-        elif name in ("Read", "read_file"):
-            return f"\U0001f4d6 Read: {params.get('file_path', params.get('path', ''))}"
-        elif name in ("Grep", "Glob", "list_directory"):
-            pattern = params.get("pattern", params.get("path", ""))
-            return f"\U0001f50d {name}: {pattern}"
+        elif name == "read_file":
+            return f"\U0001f4c4 Read: {params.get('file_path', params.get('path', ''))}"
+        elif name in ("Read", "Grep", "Glob", "list_directory"):
+            # Silent — noisy filesystem lookups not worth surfacing to user
+            return ""
         elif name in ("WebFetch", "web_fetch"):
             return f"\U0001f310 Fetch: {params.get('url', '')}"
         elif name in ("WebSearch", "google_web_search"):

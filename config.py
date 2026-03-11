@@ -54,6 +54,9 @@ CLI_SYSTEM_PROMPT: str = os.environ.get("CLI_SYSTEM_PROMPT", "")
 # Bot display name — derived from CLI_RUNNER unless overridden
 BOT_NAME: str = os.environ.get("BOT_NAME", "")
 
+# Bot emoji — prepended to every response. Derived from CLI_RUNNER unless overridden
+BOT_EMOJI: str = os.environ.get("BOT_EMOJI", "")
+
 HOST: str = os.environ.get("HOST", "0.0.0.0")
 PORT: int = int(os.environ.get("PORT", "8588"))
 WEBHOOK_URL: str = os.environ.get("WEBHOOK_URL", "")
@@ -95,20 +98,22 @@ CALL_MAX_SPEECH_DURATION: int = int(os.environ.get("CALL_MAX_SPEECH_DURATION", "
 # === Auto-detection ===
 
 _CLI_DEFAULTS: dict[str, dict] = {
-    "claude": {"command": "claude", "bot_name": "Claude"},
-    "gemini": {"command": "gemini", "bot_name": "Gemini"},
-    "codex":  {"command": "codex",  "bot_name": "Codex"},
-    "qwen":   {"command": "qwen",   "bot_name": "Qwen"},
+    "claude": {"command": "claude", "bot_name": "Claude", "bot_emoji": "🤖"},
+    "gemini": {"command": "gemini", "bot_name": "Gemini", "bot_emoji": "✨"},
+    "codex":  {"command": "codex",  "bot_name": "Codex",  "bot_emoji": "⚡"},
+    "qwen":   {"command": "qwen",   "bot_name": "Qwen",   "bot_emoji": "🔮"},
 }
 
 def _auto_detect():
-    """Fill in CLI_COMMAND and BOT_NAME from CLI_RUNNER if not explicitly set."""
-    global CLI_COMMAND, BOT_NAME
+    """Fill in CLI_COMMAND, BOT_NAME, and BOT_EMOJI from CLI_RUNNER if not explicitly set."""
+    global CLI_COMMAND, BOT_NAME, BOT_EMOJI
     defaults = _CLI_DEFAULTS.get(CLI_RUNNER, {})
     if not CLI_COMMAND:
         CLI_COMMAND = defaults.get("command", CLI_RUNNER)
     if not BOT_NAME:
         BOT_NAME = defaults.get("bot_name", CLI_RUNNER.capitalize())
+    if not BOT_EMOJI:
+        BOT_EMOJI = defaults.get("bot_emoji", "")
 
 _auto_detect()
 

@@ -18,11 +18,11 @@ from pydantic import BaseModel
 import health
 from config import (
     ALLOWED_USER_ID, ALLOWED_USER_IDS, USER_NAMES, HOST, PORT, VOICE_MAX_LENGTH, WEBHOOK_URL,
-    CLI_RUNNER, BOT_NAME, MEMORY_DIR,
+    CLI_RUNNER, BOT_NAME, BOT_EMOJI, MEMORY_DIR,
     is_cli_available, validate_config, logger,
 )
 from runners import create_runner
-from telegram_handler import send_message, send_voice, send_photo, send_video, send_chat_action, download_photo, download_document, register_webhook, delete_webhook, get_updates, close_client
+from telegram_handler import send_message, delete_message, send_voice, send_photo, send_video, send_chat_action, download_photo, download_document, register_webhook, delete_webhook, get_updates, close_client
 from image_handler import generate_image
 from voice_handler import download_voice, transcribe_audio, text_to_speech, cleanup_file
 import memory_handler
@@ -89,6 +89,10 @@ PROMPTS = {}
 # -- Instance manager --------------------------------------------------------
 instances = InstanceManager()
 
+# -- Session store (crash recovery) ------------------------------------------
+import session_store as _ss_mod
+_session_store = _ss_mod.SessionStore()
+_SHUTDOWN_FLAG = os.path.expanduser(f"~/.jefe/pids/{CLI_RUNNER}.shutdown_clean")
 
 # -- Message types -----------------------------------------------------------
 
@@ -236,6 +240,72 @@ async def _notify_startup_background() -> None:
     await send_message(ALLOWED_USER_ID, "\u2705 Server restarted and ready.")
 
 
+async def _restore_sessions_after_crash() -> None:
+    """Recreate all instances from stored state after a crash.
+
+    Runs as a background task on startup when no shutdown_clean flag is found.
+    Instances are recreated in their original order. Unresolved instances get
+    an auto-queued recovery message so the bot resumes the task automatically.
+    """
+    await asyncio.sleep(0.5)  # let startup fully complete first
+
+    sessions = _session_store.get_all_sessions(CLI_RUNNER)
+    if not sessions:
+        return
+
+    _session_store.prune_old_messages()
+
+    unresolved_count = 0
+    by_chat: dict[str, list[dict]] = {}
+    for s in sessions:
+        by_chat.setdefault(s["chat_id"], []).append(s)
+
+    for chat_id_str, chat_sessions in by_chat.items():
+        chat_id = int(chat_id_str)
+        owner_id = 0 if chat_id == ALLOWED_USER_ID else chat_id
+
+        for s in chat_sessions:  # already ordered by instance_number
+            num = s["instance_number"]
+            title = s.get("title") or f"Instance {num}"
+
+            inst = instances.create_with_number(num, title, owner_id=owner_id)
+            _ensure_worker(inst)
+
+            # Restore session_id so runner uses --resume on recovery
+            if s.get("session_id"):
+                inst.session_id = s["session_id"]
+                inst.session_started = True
+                if CLI_RUNNER == "codex":
+                    inst.adapter_data["thread_id"] = s["session_id"]
+
+            if s["status"] == "unresolved" and s.get("original_prompt"):
+                unresolved_count += 1
+                inst.needs_recovery = True
+
+                context = _session_store.build_recovery_context(chat_id, CLI_RUNNER, num)
+                recovery_text = (
+                    f"[CRASH RECOVERY] The server restarted unexpectedly. "
+                    f"Please resume your previous task.\n\n{context}"
+                    if context else
+                    f"[CRASH RECOVERY] The server restarted. "
+                    f"Please resume: {s['original_prompt']}"
+                )
+                item = QueuedMessage(
+                    chat_id=chat_id,
+                    msg_type=MessageType.TEXT,
+                    text=recovery_text,
+                    instance_id=inst.id,
+                    user_id=ALLOWED_USER_ID if owner_id == 0 else owner_id,
+                )
+                await inst.queue.put(item)
+
+    if unresolved_count:
+        await send_message(
+            ALLOWED_USER_ID,
+            f"\u267b\ufe0f Crash detected. Restoring {unresolved_count} active session(s)...",
+        )
+
+
 # -- Lifespan ----------------------------------------------------------------
 
 @asynccontextmanager
@@ -260,6 +330,17 @@ async def lifespan(application: FastAPI):
         logger.info("No WEBHOOK_URL set — starting long-poll mode")
         asyncio.create_task(_run_polling())
 
+    # Crash detection: if shutdown_clean flag is absent, the last run crashed
+    _crashed = not os.path.exists(_SHUTDOWN_FLAG)
+    if not _crashed:
+        try:
+            os.remove(_SHUTDOWN_FLAG)
+        except OSError:
+            pass
+        logger.info("Clean boot detected (shutdown_clean flag found)")
+    else:
+        logger.info("Crash detected (no shutdown_clean flag) — will restore sessions")
+
     # Start worker for the default instance (primary user)
     _ensure_worker(instances.active)
 
@@ -282,6 +363,8 @@ async def lifespan(application: FastAPI):
     logger.info("Telegram-Claude bridge is ready")
     asyncio.create_task(_start_scheduler_background())
     asyncio.create_task(_notify_startup_background())
+    if _crashed:
+        asyncio.create_task(_restore_sessions_after_crash())
     # Proactive worker does NOT auto-start — use /agent proactive start to enable
     yield
     # Clean up voice call if active
@@ -298,6 +381,13 @@ async def lifespan(application: FastAPI):
                 pass
     await proactive_worker.stop()
     await close_client()
+    # Write clean shutdown flag so next boot knows this was intentional
+    try:
+        Path(_SHUTDOWN_FLAG).parent.mkdir(parents=True, exist_ok=True)
+        Path(_SHUTDOWN_FLAG).write_text(str(int(time.time())))
+        logger.info("Clean shutdown flag written")
+    except OSError as e:
+        logger.warning("Could not write shutdown flag: %s", e)
     logger.info("Bridge shut down")
 
 
@@ -651,13 +741,14 @@ async def _resolve_target_instance_async(text: str, user_id: int = 0):
 # -- Processing functions ----------------------------------------------------
 
 
-def _label(instance, response: str, owner_id: int = 0) -> str:
+def _label(instance, response: str, owner_id: int = 0, show_emoji: bool = True) -> str:
     """Prefix response with instance label when the user has multiple instances."""
+    prefix = f"{BOT_EMOJI} " if BOT_EMOJI and show_emoji else ""
     owner_insts = instances.list_all(for_owner_id=owner_id)
     if len(owner_insts) >= 2 and instance:
         disp = instances.display_num(instance.id, owner_id)
-        return f"**[#{disp}: {instance.title}]**\n{response}"
-    return response
+        return f"{prefix}**[#{disp}: {instance.title}]**\n{response}"
+    return f"{prefix}{response}" if prefix else response
 
 
 def _fmt_tokens(n: int) -> str:
@@ -718,7 +809,7 @@ async def _extract_and_send_media(chat_id: int, text: str) -> list[str]:
 async def _process_message(chat_id: int, text: str, voice_reply: bool = False, instance=None, user_id: int = 0) -> None:
     inst = instance or instances.active
     proc_owner_id = 0 if user_id == ALLOWED_USER_ID else user_id
-    await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id), format_markdown=True)
+    thinking_msg_id = await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id, show_emoji=False), format_markdown=True)
 
     start = time.time()
 
@@ -732,12 +823,37 @@ async def _process_message(chat_id: int, text: str, voice_reply: bool = False, i
         memory_context = await memory_handler.search_memory(text, user_id=user_id)
 
     async def on_progress(progress_text: str):
-        await send_message(chat_id, _label(inst, progress_text, proc_owner_id), format_markdown=True)
+        await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
+
+    # --- Session store: mark this instance as actively processing ---
+    if inst.needs_recovery:
+        # Recovery message: keep original_prompt intact, just update session_id
+        inst.needs_recovery = False
+        _session_store.upsert_session(
+            chat_id, CLI_RUNNER, inst.id,
+            session_id=inst.session_id,
+            status="unresolved",
+        )
+    else:
+        _session_store.mark_unresolved(
+            chat_id, CLI_RUNNER, inst.id,
+            original_prompt=text,
+            session_id=inst.session_id,
+            title=inst.title,
+        )
+    _session_store.log_message(chat_id, CLI_RUNNER, inst.id, "user", text)
 
     sender_name = USER_NAMES.get(user_id, "") if user_id else ""
     prefixed_text = f"[{sender_name}]: {text}" if sender_name else text
     response = await runner.run(prefixed_text, on_progress=on_progress, memory_context=memory_context, instance=inst)
     elapsed = time.time() - start
+
+    # --- Session store: log response and update session_id ---
+    _session_store.log_message(chat_id, CLI_RUNNER, inst.id, "assistant", response)
+    _session_store.update_session_id(chat_id, CLI_RUNNER, inst.id, inst.session_id)
+
+    if thinking_msg_id:
+        await delete_message(chat_id, thinking_msg_id)
 
     if not response or not response.strip():
         response = "(no text response from Claude — check tool output)"
@@ -767,6 +883,10 @@ async def _process_message(chat_id: int, text: str, voice_reply: bool = False, i
         await _send_with_voice(chat_id, labeled)
     else:
         await send_message(chat_id, labeled, format_markdown=True)
+
+    # Mark resolved AFTER delivery — if crash happens before this line,
+    # session stays unresolved and recovery will re-run the task on restart.
+    _session_store.mark_resolved(chat_id, CLI_RUNNER, inst.id)
 
     # Auto-detect and send any media files referenced in the response
     await _extract_and_send_media(chat_id, response)
@@ -800,12 +920,12 @@ async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", 
         await send_message(chat_id, _label(inst, f"\u274c Failed to download photo: {e}", proc_owner_id), format_markdown=True)
         return
 
-    await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id), format_markdown=True)
+    thinking_msg_id = await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id, show_emoji=False), format_markdown=True)
 
     start = time.time()
 
     async def on_progress(progress_text: str):
-        await send_message(chat_id, _label(inst, progress_text, proc_owner_id), format_markdown=True)
+        await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
 
     sender_name = USER_NAMES.get(user_id, "") if user_id else ""
     prefixed_caption = f"[{sender_name}]: {caption}" if sender_name else caption
@@ -814,6 +934,8 @@ async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", 
 
     logger.info("Claude #%d responded to photo in %.1fs (%d chars)", inst.id, elapsed, len(response))
     response += _context_footer(inst)
+    if thinking_msg_id:
+        await delete_message(chat_id, thinking_msg_id)
     await send_message(chat_id, _label(inst, response, proc_owner_id), format_markdown=True)
 
     # Clean up temp image
@@ -855,17 +977,20 @@ async def _process_voice_message(chat_id: int, file_id: str, caption: str = "", 
 
     # Show what was transcribed
     await send_message(chat_id, _label(inst, f"\U0001f4dd \"{transcribed}\"", proc_owner_id), format_markdown=True)
-    await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id), format_markdown=True)
+    thinking_msg_id = await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id, show_emoji=False), format_markdown=True)
 
     start = time.time()
 
     memory_context = await memory_handler.search_memory(raw_prompt, user_id=user_id)
 
     async def on_progress(progress_text: str):
-        await send_message(chat_id, _label(inst, progress_text, proc_owner_id), format_markdown=True)
+        await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
 
     response = await runner.run(prompt, on_progress=on_progress, memory_context=memory_context, instance=inst)
     elapsed = time.time() - start
+
+    if thinking_msg_id:
+        await delete_message(chat_id, thinking_msg_id)
 
     if not response or not response.strip():
         response = "(no text response from Claude — check tool output)"
@@ -1040,6 +1165,8 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         if not stopped and inst.current_task and not inst.current_task.done():
             inst.current_task.cancel()
             task_cancelled = True
+        # Mark resolved so a future restart doesn't try to resume this task
+        _session_store.mark_resolved(chat_id, CLI_RUNNER, inst.id)
 
         label = f" [#{instances.display_num(inst.id, owner_id)}: {inst.title}]" if len(instances.list_all(for_owner_id=owner_id)) >= 2 else ""
         parts = []
@@ -1081,6 +1208,8 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         if inst.current_task and not inst.current_task.done():
             inst.current_task.cancel()
         runner.new_session(inst)
+        # Mark resolved — starting fresh, no recovery needed on next restart
+        _session_store.mark_resolved(chat_id, CLI_RUNNER, inst.id)
         label = f" [#{instances.display_num(inst.id, owner_id)}: {inst.title}]" if len(instances.list_all(for_owner_id=owner_id)) >= 2 else ""
         await send_message(chat_id, f"\U0001f195 New conversation started. Queue cleared.{label}")
 
@@ -1148,17 +1277,21 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "_Types: research, analytics, writing, coding, manager_\n\n"
             "**\U0001f4dc Instances (Multi-Chat)**\n"
             f"_{inst_info}_\n"
-            "Each instance is a separate Claude Code session with its own conversation history. "
+            "Each instance is a separate CLI session with its own conversation history. "
             "They don't share context \u2014 you can have one researching while another codes.\n"
             "Instances run concurrently \u2014 you can send messages to different instances without waiting.\n"
-            "/claude new <title> \u2014 Spin up a new independent Claude session\n"
-            "/claude list \u2014 Show all running instances with IDs & titles\n"
-            "/claude switch <id/title> [new_title] \u2014 Switch instance (creates if missing, renames if new_title given)\n"
-            "/claude rename <id> <title> \u2014 Rename an instance\n"
-            "/claude end <id> \u2014 Close an instance (can't close the last one)\n"
-            "/claude \u2014 Show active instance & subcommands\n"
-            "_When 2+ instances exist, responses are labeled. Mention an instance by name or # to auto-route._\n"
-            "@<id or name> <message> \u2014 One-shot to a specific instance without switching active (creates if missing)\n\n"
+            "/inst new <title> \u2014 Spin up a new independent CLI session\n"
+            "/inst list \u2014 Show all running instances with IDs & titles\n"
+            "/inst switch <id/title> [new_title] \u2014 Switch instance (creates if missing, renames if new_title given)\n"
+            "/inst rename <id> <title> \u2014 Rename an instance\n"
+            "/inst end <id> \u2014 Close an instance (can't close the last one)\n"
+            "/inst \u2014 Show active instance & subcommands\n"
+            "_When 2+ instances exist, responses are labeled. Mention an instance by name or # to auto-route._\n\n"
+            "**\U0001f4e8 Quick Message (@)**\n"
+            "Send a one-shot message to any instance without switching away from your current one.\n"
+            "`@<id or name> <message>` \u2014 Routes message to that instance & brings back the reply. You stay on your current instance.\n"
+            "_Example: `@2 what's the status?` or `@Research summarize what you found`_\n"
+            "_Creates the instance if it doesn\u2019t exist yet._\n\n"
             "**\U0001f3a4 Voice**\n"
             f"/call \u2014 Join group voice chat [{call_status}]\n"
             "/endcall \u2014 Leave voice chat\n"
@@ -1168,7 +1301,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "/stop \u2014 Stop current task & clear queue (active instance only)\n"
             "/kill \u2014 Force-kill all Claude processes across all instances\n"
             f"/chrome \u2014 Toggle Chrome browser [{chrome_status}]\n"
-            f"/model sonnet|opus \u2014 Switch model for active instance [{active.model.split("-")[1].capitalize()}]\n\n"
+            f"/model sonnet|opus \u2014 Switch model for active instance [{(active.model.split('-')[1] if '-' in active.model else active.model).capitalize()}]\n\n"
             "**\U0001f9e0 Memory & Tasks**\n"
             "/remember <text> \u2014 Save to memory\n"
             "/task \u2014 View/manage task list\n"
@@ -1286,7 +1419,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             else:
                 await send_message(chat_id, "\u274c Invalid model. Choose 'sonnet' or 'opus'.")
 
-    elif cmd == "/claude":
+    elif cmd == "/inst":
         parts = text.split(maxsplit=2)
         sub = parts[1].lower() if len(parts) > 1 else ""
         arg = parts[2] if len(parts) > 2 else ""
@@ -1306,9 +1439,9 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
 
         elif sub == "switch":
             if not arg:
-                await send_message(chat_id, "Usage: /claude switch <id/title> [new_title]")
+                await send_message(chat_id, "Usage: /inst switch <id/title> [new_title]")
             else:
-                # Handle potential rename: /claude switch <id/title> <new_title>
+                # Handle potential rename: /inst switch <id/title> <new_title>
                 switch_parts = arg.split(maxsplit=1)
                 target = switch_parts[0]
                 new_title = switch_parts[1] if len(switch_parts) > 1 else None
@@ -1334,7 +1467,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         elif sub == "rename":
             rename_parts = arg.split(maxsplit=1)
             if len(rename_parts) < 2 or not rename_parts[0].isdigit():
-                await send_message(chat_id, "Usage: /claude rename <id> <new title>")
+                await send_message(chat_id, "Usage: /inst rename <id> <new title>")
             else:
                 disp_num = int(rename_parts[0])
                 new_title = rename_parts[1]
@@ -1342,11 +1475,11 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 if target_inst and instances.rename(target_inst.id, new_title, owner_id=owner_id):
                     await send_message(chat_id, f"\u270f\ufe0f Renamed #{disp_num} to <b>{new_title}</b>", parse_mode="HTML")
                 else:
-                    await send_message(chat_id, f"No instance #{disp_num}. Try /claude list")
+                    await send_message(chat_id, f"No instance #{disp_num}. Try /inst list")
 
         elif sub == "end":
             if not arg or not arg.isdigit():
-                await send_message(chat_id, "Usage: /claude end <id>")
+                await send_message(chat_id, "Usage: /inst end <id>")
             else:
                 disp_num = int(arg)
                 inst_to_end = instances.get_by_display_num(disp_num, owner_id)
@@ -1368,7 +1501,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                     if inst_to_end and owner_inst_count <= 1:
                         await send_message(chat_id, "Can't end the last instance.")
                     else:
-                        await send_message(chat_id, f"No instance #{disp_num}. Try /claude list")
+                        await send_message(chat_id, f"No instance #{disp_num}. Try /inst list")
 
         else:
             inst = instances.get_active_for(owner_id)
@@ -1376,11 +1509,11 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 chat_id,
                 f"Active: <b>#{instances.display_num(inst.id, owner_id)}: {inst.title}</b>\n\n"
                 f"Commands:\n"
-                f"/claude new &lt;title&gt; \u2014 New instance\n"
-                f"/claude list \u2014 Show all instances\n"
-                f"/claude switch &lt;id/title&gt; [new_title] \u2014 Switch/Create/Rename\n"
-                f"/claude rename &lt;id&gt; &lt;title&gt; \u2014 Rename\n"
-                f"/claude end &lt;id&gt; \u2014 End instance",
+                f"/inst new &lt;title&gt; \u2014 New instance\n"
+                f"/inst list \u2014 Show all instances\n"
+                f"/inst switch &lt;id/title&gt; [new_title] \u2014 Switch/Create/Rename\n"
+                f"/inst rename &lt;id&gt; &lt;title&gt; \u2014 Rename\n"
+                f"/inst end &lt;id&gt; \u2014 End instance",
                 parse_mode="HTML",
             )
 

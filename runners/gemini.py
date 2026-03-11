@@ -197,13 +197,14 @@ class GeminiRunner(RunnerBase):
         stderr_output = b""
         captured_session_id: str | None = None
         _usage = {"input": 0, "output": 0, "total": 0}
+        _planning_sent = False  # only forward first delta as a 💭 status
 
         async def drain_stderr():
             nonlocal stderr_output
             stderr_output = await proc.stderr.read()
 
         async def process_stdout():
-            nonlocal captured_session_id
+            nonlocal captured_session_id, _planning_sent
             async for raw_line in proc.stdout:
                 line = raw_line.decode(errors="replace").strip()
                 if not line:
@@ -220,16 +221,23 @@ class GeminiRunner(RunnerBase):
                     if sid:
                         captured_session_id = sid
 
-                elif msg_type == "tool_use" and on_progress:
-                    progress = self.format_tool_progress(
-                        data.get("tool_name", ""), data.get("parameters", {}))
-                    if progress:
-                        await on_progress(progress)
+                elif msg_type == "tool_use":
+                    if on_progress:
+                        progress = self.format_tool_progress(
+                            data.get("tool_name", ""), data.get("parameters", {}))
+                        if progress:
+                            await on_progress(progress)
 
                 elif msg_type == "message":
                     role = data.get("role", "")
                     content = data.get("content", "")
                     if role == "assistant" and content:
+                        # Forward the first planning delta as a 💭 status (like Claude thinking)
+                        if not _planning_sent and data.get("delta") and on_progress:
+                            brief = content.strip().splitlines()[0][:120]
+                            if brief:
+                                await on_progress(f"\U0001f4ad {brief}")
+                            _planning_sent = True
                         assistant_text_parts.append(content)
 
                 elif msg_type == "result":

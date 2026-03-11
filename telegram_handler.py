@@ -34,8 +34,17 @@ def markdown_to_telegram_html(text: str) -> str:
     # Code blocks (```lang\n...\n```) → <pre>...</pre>
     text = re.sub(r"```\w*\n(.*?)```", r"<pre>\1</pre>", text, flags=re.DOTALL)
 
-    # Inline code (`...`) → <code>...</code>
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    # Inline code (`...`) → <code>...</code>, but URLs → <a href>
+    def _inline_code(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        # html.escape was already applied, so check for http/https in escaped form
+        if re.match(r"https?://", inner):
+            return f'<a href="{inner}">{inner}</a>'
+        return f"<code>{inner}</code>"
+    text = re.sub(r"`([^`]+)`", _inline_code, text)
+
+    # Bare URLs (not already inside an href) → <a href>
+    text = re.sub(r'(?<!href=")(https?://[^\s<>"]+)', r'<a href="\1">\1</a>', text)
 
     # Headers (## ...) → bold line
     text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
@@ -91,12 +100,12 @@ def split_message(text: str, limit: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> list[s
     return chunks
 
 
-async def send_message(chat_id: int, text: str, format_markdown: bool = False, parse_mode: str | None = None) -> bool:
+async def send_message(chat_id: int, text: str, format_markdown: bool = False, parse_mode: str | None = None) -> int | None:
     """Send a text message to a Telegram chat. Splits if too long.
 
     If format_markdown is True, converts GitHub markdown to Telegram HTML.
     If parse_mode is provided, it is used directly (e.g., "HTML" or "MarkdownV2").
-    Returns True if all chunks sent successfully, False otherwise.
+    Returns the message_id of the first chunk on success, None on failure.
     """
     if format_markdown:
         text = markdown_to_telegram_html(text)
@@ -104,18 +113,18 @@ async def send_message(chat_id: int, text: str, format_markdown: bool = False, p
 
     if not text.strip():
         logger.warning("Attempted to send empty message to chat %d", chat_id)
-        return False
+        return None
 
     chunks = split_message(text)
     client = await get_client()
-    success = True
+    first_id: int | None = None
 
     for chunk in chunks:
-        ok = await _send_single(client, chat_id, chunk, parse_mode=parse_mode)
-        if not ok:
-            success = False
+        msg_id = await _send_single(client, chat_id, chunk, parse_mode=parse_mode)
+        if first_id is None:
+            first_id = msg_id
 
-    return success
+    return first_id
 
 
 async def send_voice(chat_id: int, ogg_path: str, caption: str | None = None) -> bool:
@@ -299,14 +308,26 @@ async def send_chat_action(chat_id: int, action: str) -> None:
         pass
 
 
+async def delete_message(chat_id: int, message_id: int) -> bool:
+    """Delete a message by chat_id and message_id. Returns True on success."""
+    client = await get_client()
+    url = f"{TELEGRAM_API}/deleteMessage"
+    try:
+        resp = await client.post(url, json={"chat_id": chat_id, "message_id": message_id})
+        return resp.status_code == 200
+    except httpx.HTTPError as exc:
+        logger.error("deleteMessage HTTP error: %s", exc)
+        return False
+
+
 async def _send_single(
     client: httpx.AsyncClient,
     chat_id: int,
     text: str,
     retry: bool = True,
     parse_mode: str | None = None,
-) -> bool:
-    """Send a single message chunk. Falls back to plain text if HTML is rejected."""
+) -> int | None:
+    """Send a single message chunk. Returns message_id on success, None on failure."""
     url = f"{TELEGRAM_API}/sendMessage"
     payload: dict = {"chat_id": chat_id, "text": text}
     if parse_mode:
@@ -315,7 +336,7 @@ async def _send_single(
     try:
         resp = await client.post(url, json=payload)
         if resp.status_code == 200:
-            return True
+            return resp.json().get("result", {}).get("message_id")
 
         # If Telegram rejected our HTML, retry as plain text
         if parse_mode and resp.status_code == 400:
@@ -332,4 +353,4 @@ async def _send_single(
         logger.info("Retrying send to chat %d", chat_id)
         return await _send_single(client, chat_id, text, retry=False, parse_mode=parse_mode)
 
-    return False
+    return None

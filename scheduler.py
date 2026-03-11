@@ -387,7 +387,6 @@ def run_task(task: dict) -> None:
 
 async def scheduler_loop() -> None:
     logger.info('Scheduler loop started.')
-    await asyncio.to_thread(send_telegram, '[Scheduler] Started and watching for tasks.')
     while True:
         try:
             tasks = await asyncio.to_thread(read_schedule)

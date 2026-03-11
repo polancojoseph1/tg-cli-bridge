@@ -53,6 +53,9 @@ class Instance:
     agent_system_prompt: str = field(default="", repr=False, compare=False)
     # Extensible: adapter-specific state (e.g. thread_id for Codex)
     adapter_data: dict = field(default_factory=dict, repr=False, compare=False)
+    # Crash recovery: True when this instance was restored after a crash and
+    # the next message is the auto-recovery prompt (not a fresh user message).
+    needs_recovery: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self):
         self.queue = asyncio.Queue(maxsize=MAX_INSTANCE_QUEUE)
@@ -198,6 +201,26 @@ class InstanceManager:
             removed.current_task.cancel()
         logger.info("Removed instance #%d: %s (owner=%d)", removed.id, removed.title, owner_id)
         return removed
+
+    def create_with_number(self, number: int, title: str, owner_id: int = 0) -> Instance:
+        """Create an instance with a specific ID, or update the existing one.
+
+        Used during crash recovery to recreate instances in their original order.
+        If the instance already exists (e.g. the auto-created Default #1),
+        its title and ownership are updated in-place.
+        """
+        if number in self._instances:
+            inst = self._instances[number]
+            inst.title = title
+            self._instance_owner[number] = owner_id
+            return inst
+        inst = Instance(id=number, title=title)
+        self._instances[number] = inst
+        self._instance_owner[number] = owner_id
+        if number >= self._next_id:
+            self._next_id = number + 1
+        logger.info("Restored instance #%d: %s owner=%d", number, title, owner_id)
+        return inst
 
     # ------------------------------------------------------------------
     # User pinning (primary instance per non-primary user)

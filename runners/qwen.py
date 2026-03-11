@@ -135,6 +135,10 @@ class QwenRunner(RunnerBase):
                 )
             if self.system_prompt:
                 system_parts.append(self.system_prompt)
+            system_parts.append(
+                "Web search is rate-limited. Minimize search calls: combine related queries into one, "
+                "and avoid re-searching the same topic. One well-crafted query is better than several rapid ones."
+            )
         if memory_context:
             system_parts.append(memory_context)
 
@@ -214,7 +218,11 @@ class QwenRunner(RunnerBase):
                                 block.get("name", ""), block.get("input", {}))
                             if progress:
                                 await on_progress(progress)
-                        # skip "thinking" blocks — internal chain-of-thought
+                        elif block_type == "thinking" and on_progress:
+                            thought = block.get("thinking", "").strip()
+                            if thought:
+                                brief = thought.splitlines()[0][:120]
+                                await on_progress(f"\U0001f4ad {brief}")
 
                 elif msg_type == "result":
                     final_result = data.get("result", "")
