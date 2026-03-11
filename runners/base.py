@@ -29,6 +29,36 @@ class RunnerBase(ABC):
     name: str = ""              # e.g. "claude", "gemini", "codex"
     cli_command: str = ""       # binary name to find in PATH (e.g. "claude")
 
+    @staticmethod
+    def _brief_thought(text: str, limit: int = 80) -> str:
+        """Condense a thinking/planning string for display as a status bubble.
+
+        - Takes only the first line
+        - Strips common filler openers ("The user wants", "I need to", etc.)
+        - Truncates at the last word boundary before `limit` chars
+        - Appends … if truncated
+        """
+        line = text.strip().splitlines()[0] if text.strip() else ""
+        if not line:
+            return ""
+        # Strip redundant filler openers
+        _FILLERS = (
+            "the user wants to ", "the user wants ", "the user asked ",
+            "the user is asking ", "the user needs ",
+            "i need to ", "i will ", "i am going to ", "i should ", "i'm going to ",
+        )
+        lower = line.lower()
+        for filler in _FILLERS:
+            if lower.startswith(filler):
+                line = line[len(filler):]
+                line = line[0].upper() + line[1:] if line else line
+                break
+        # Truncate at word boundary
+        if len(line) <= limit:
+            return line
+        truncated = line[:limit].rsplit(" ", 1)[0].rstrip(",;:")
+        return truncated + "…"
+
     def discover_binary(self) -> str:
         """Find the CLI binary in PATH. Raises FileNotFoundError if missing."""
         path = shutil.which(self.cli_command)

@@ -171,7 +171,7 @@ class CodexRunner(RunnerBase):
                 text = " ".join(s.get("text", "") for s in summary if isinstance(s, dict)).strip()
             else:
                 text = item.get("text", "").strip()
-            brief = text.splitlines()[0][:120] if text else ""
+            brief = self._brief_thought(text) if text else ""
             return f"\U0001f4ad {brief}" if brief else ""
 
         return ""

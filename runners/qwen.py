@@ -231,7 +231,7 @@ class QwenRunner(RunnerBase):
                         elif block_type == "thinking" and on_progress:
                             thought = block.get("thinking", "").strip()
                             if thought:
-                                brief = thought.splitlines()[0][:120]
+                                brief = self._brief_thought(thought)
                                 await on_progress(f"\U0001f4ad {brief}")
 
                 elif msg_type == "result":

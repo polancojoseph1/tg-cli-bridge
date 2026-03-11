@@ -244,7 +244,7 @@ class GeminiRunner(RunnerBase):
                     if role == "assistant" and content:
                         # Forward the first planning delta as a 💭 status (like Claude thinking)
                         if not _planning_sent and data.get("delta") and on_progress:
-                            brief = content.strip().splitlines()[0][:120]
+                            brief = self._brief_thought(content)
                             if brief:
                                 await on_progress(f"\U0001f4ad {brief}")
                             _planning_sent = True
