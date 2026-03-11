@@ -206,6 +206,7 @@ class QwenRunner(RunnerBase):
 
         async def process_stream():
             nonlocal final_result, _stalled
+            _any_progress_sent = False
             async for line, _offset in self.tail_log_file(log_path, start_offset=log_start_offset, proc=proc, stall_timeout=90):
                 if not line:
                     continue
@@ -229,7 +230,12 @@ class QwenRunner(RunnerBase):
                             progress = self.format_tool_progress(
                                 block.get("name", ""), block.get("input", {}))
                             if progress:
+                                _any_progress_sent = True
                                 await on_progress(progress)
+                            elif not _any_progress_sent:
+                                # First silent tool call (read/glob/grep) — send one generic indicator
+                                _any_progress_sent = True
+                                await on_progress("\U0001f4c2 Working...")
                         elif block_type == "thinking":
                             pass  # thinking mode removed — drop silently
                         elif block_type == "text":
