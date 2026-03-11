@@ -202,12 +202,10 @@ class QwenRunner(RunnerBase):
         assistant_text_parts: list[str] = []
         _usage: dict = {}
 
-        _stalled = False
-
         async def process_stream():
-            nonlocal final_result, _stalled
+            nonlocal final_result
             _any_progress_sent = False
-            async for line, _offset in self.tail_log_file(log_path, start_offset=log_start_offset, proc=proc, stall_timeout=90):
+            async for line, _offset in self.tail_log_file(log_path, start_offset=log_start_offset, proc=proc):
                 if not line:
                     continue
                 try:
@@ -253,16 +251,7 @@ class QwenRunner(RunnerBase):
                     final_result = data.get("result", "")
                     _usage["total_tokens"] = data.get("usage", {}).get("total_tokens", 0)
 
-            # If process is still alive after stall_timeout, mark stalled and kill it
-            if proc.returncode is None:
-                _stalled = True
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except ProcessLookupError:
-                    pass
-            else:
-                await proc.wait()
+            await proc.wait()
 
         try:
             await asyncio.wait_for(process_stream(), timeout=self.timeout)
@@ -292,16 +281,6 @@ class QwenRunner(RunnerBase):
             instance.subprocess_log_file = ""
             instance.subprocess_start_time = ""
             return "\U0001f6d1 Stopped."
-
-        # Handle stall before checking returncode — stall kills the process (returncode -9)
-        # so we must check _stalled first or it falls into the generic error handler.
-        if _stalled:
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
-            if assistant_text_parts:
-                return "".join(assistant_text_parts)
-            return "\u23f0 Qwen got stuck processing a large request (stalled with no output for 90s). Try a more specific question."
 
         if proc.returncode == 0:
             instance.session_started = True
