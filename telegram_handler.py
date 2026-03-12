@@ -26,10 +26,67 @@ async def close_client() -> None:
         _client = None
 
 
+def _convert_markdown_tables(text: str) -> str:
+    """Convert markdown pipe tables to <pre> monospace blocks.
+
+    Telegram has no table support in HTML or MarkdownV2, so we render
+    tables as fixed-width text inside a <pre> block.
+    """
+    lines = text.split("\n")
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Table detected: current line has pipes AND next line is a separator row
+        if (
+            "|" in line
+            and i + 1 < len(lines)
+            and re.match(r"^\s*\|[\s\-|:]+\|\s*$", lines[i + 1])
+        ):
+            # Collect all consecutive pipe-containing lines
+            table_lines = []
+            while i < len(lines) and "|" in lines[i]:
+                table_lines.append(lines[i])
+                i += 1
+            # Parse rows, skip separator rows
+            rows = []
+            for tl in table_lines:
+                if re.match(r"^\s*\|[\s\-|:]+\|\s*$", tl):
+                    continue
+                cells = [c.strip() for c in tl.strip().strip("|").split("|")]
+                rows.append(cells)
+            if not rows:
+                continue
+            # Calculate column widths
+            num_cols = max(len(r) for r in rows)
+            widths = [0] * num_cols
+            for row in rows:
+                for j in range(min(len(row), num_cols)):
+                    widths[j] = max(widths[j], len(row[j]))
+            # Render with unicode box chars
+            rendered = []
+            for k, row in enumerate(rows):
+                padded = [
+                    (row[j] if j < len(row) else "").ljust(widths[j])
+                    for j in range(num_cols)
+                ]
+                rendered.append(" \u2502 ".join(padded).rstrip())
+                if k == 0:
+                    rendered.append("\u2500" * (sum(widths) + 3 * (num_cols - 1)))
+            result.append("<pre>" + "\n".join(rendered) + "</pre>")
+        else:
+            result.append(line)
+            i += 1
+    return "\n".join(result)
+
+
 def markdown_to_telegram_html(text: str) -> str:
     """Convert GitHub-flavored markdown to Telegram-compatible HTML."""
     # Escape HTML entities first so Claude's output can't inject tags
     text = html.escape(text)
+
+    # Convert markdown tables to <pre> monospace blocks (Telegram has no table support)
+    text = _convert_markdown_tables(text)
 
     # Code blocks (```lang\n...\n```) → <pre>...</pre>
     text = re.sub(r"```\w*\n(.*?)```", r"<pre>\1</pre>", text, flags=re.DOTALL)
