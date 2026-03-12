@@ -126,9 +126,14 @@ class QwenRunner(RunnerBase):
             system_parts.append(instance.agent_system_prompt)
         else:
             if self.memory_enabled:
+                user_md_path = os.path.join(self.memory_dir, "USER.md")
+                user_md_hint = (
+                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
+                    if os.path.exists(user_md_path) else ""
+                )
                 system_parts.append(
                     f"You have a persistent memory system at {self.memory_dir}/. "
-                    f"At the start of a session, read {self.memory_dir}/USER.md to understand who you're talking to, "
+                    + user_md_hint +
                     f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
                     "If you learn new important facts during this conversation "
                     "(new projects, decisions, preferences, contacts, or corrections to existing info), "

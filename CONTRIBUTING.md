@@ -5,7 +5,7 @@ Thanks for your interest! This guide covers how to set up a dev environment, add
 ## Dev Setup
 
 ```bash
-git clone https://github.com/polancojoseph1/tg-cli-bridge.git
+git clone https://github.com/your-username/tg-cli-bridge.git
 cd tg-cli-bridge
 
 python -m venv .venv

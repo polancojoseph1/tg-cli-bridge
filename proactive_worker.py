@@ -1,7 +1,7 @@
 """Proactive agent worker — fires scheduled Claude agents automatically.
 
 Schedule formats (stored in proactive_schedule):
-    "09:00"       → daily at 09:00 NYC time
+    "09:00"       → daily at 09:00 local time (TIMEZONE env var)
     "every 2h"    → every 2 hours from when the worker started
     "every 30m"   → every 30 minutes
     "every 1h30m" → every 1.5 hours
@@ -19,6 +19,7 @@ Public API:
 
 import asyncio
 import logging
+import os
 import re
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -27,7 +28,7 @@ from agent_registry import list_agents
 
 logger = logging.getLogger("bridge.proactive_worker")
 
-NYC_TZ = ZoneInfo("America/New_York")
+LOCAL_TZ = ZoneInfo(os.environ.get("TIMEZONE", "UTC"))
 CHECK_INTERVAL = 30  # seconds — check every 30s for precision
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ def schedule_label(s: str) -> str:
     try:
         mode, val = parse_schedule(s)
         if mode == "daily":
-            return f"daily at {val} NYC"
+            return f"daily at {val} {os.environ.get('TIMEZONE', 'UTC')}"
         td: timedelta = val
         total_mins = int(td.total_seconds() // 60)
         h, m = divmod(total_mins, 60)
@@ -109,7 +110,7 @@ def _should_fire(agent_id: str, schedule: str, now: datetime) -> bool:
         if current_hhmm != val:
             return False
         # Only fire once per calendar day
-        return last is None or last.astimezone(NYC_TZ).date() < today
+        return last is None or last.astimezone(LOCAL_TZ).date() < today
 
     elif mode == "interval":
         td: timedelta = val
@@ -172,7 +173,7 @@ def status() -> str:
         task_preview = (a.proactive_task[:80] + "…") if len(a.proactive_task) > 80 else (a.proactive_task or "⚠ no task set")
         last = _last_fired.get(a.id)
         if last:
-            last_str = last.astimezone(NYC_TZ).strftime("last ran %b %-d at %-I:%M %p NYC")
+            last_str = last.astimezone(LOCAL_TZ).strftime("last ran %b %-d at %-I:%M %p")
         else:
             last_str = "never run yet"
         lines.append(
@@ -198,7 +199,7 @@ async def _loop() -> None:
 
 async def _check_and_fire() -> None:
     """Check all proactive agents and fire any that are due."""
-    now = datetime.now(tz=NYC_TZ)
+    now = datetime.now(tz=LOCAL_TZ)
 
     for agent in list_agents():
         if not agent.proactive:

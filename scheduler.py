@@ -13,6 +13,7 @@ Runs inside the FastAPI process using asyncio — no external daemon needed.
 
 import asyncio
 import logging
+import os
 import re
 import sqlite3
 from datetime import datetime, timedelta
@@ -21,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-TIMEZONE = "America/New_York"
+TIMEZONE = os.environ.get("TIMEZONE", "UTC")
 _TZ = ZoneInfo(TIMEZONE)
 _CHECK_INTERVAL = 30   # seconds between schedule checks
 _DEFAULT_TIMEOUT = 300  # seconds per task run

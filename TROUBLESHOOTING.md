@@ -212,6 +212,6 @@ tail -f ~/.tg-cli-bridge/subprocess_logs/*.log
 
 ## Still stuck?
 
-1. Check [existing issues](https://github.com/polancojoseph1/tg-cli-bridge/issues)
+1. Check [existing issues](https://github.com/your-username/tg-cli-bridge/issues)
 2. Run `/status` in Telegram for runtime diagnostics
 3. Open a new issue with: OS, Python version, CLI runner, and the relevant log lines

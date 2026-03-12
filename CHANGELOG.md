@@ -21,7 +21,7 @@ Format: [Semantic Versioning](https://semver.org/)
 - `.gitignore` excludes per-runner `.env.*` files while preserving `.env.example`
 
 ### Changed
-- All hardcoded `~/.jefe/` paths replaced with `TG_BRIDGE_DATA_DIR`-aware paths
+- All hardcoded personal paths replaced with `TG_BRIDGE_DATA_DIR`-aware paths
 - Gemini API key now sent via `x-goog-api-key` header (was URL query param — less secure)
 - `proactive_worker.py` generic copy (no project-specific names in user-facing strings)
 - `.env.example` cleaned of personal data; added `EDGAR_CONTACT` and `OLLAMA_URL` examples

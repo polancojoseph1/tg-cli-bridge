@@ -2,7 +2,7 @@ services:
   tg-cli-bridge:
     build: .
     ports:
-      - "8585:8585"
+      - "${PORT:-8588}:${PORT:-8588}"
     env_file:
       - .env
     environment:

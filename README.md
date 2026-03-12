@@ -40,7 +40,7 @@ npm install -g @openai/codex
 ### 2. Clone and set up
 
 ```bash
-git clone https://github.com/polancojoseph1/tg-cli-bridge.git
+git clone https://github.com/your-username/tg-cli-bridge.git
 cd tg-cli-bridge
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -184,7 +184,7 @@ All settings are in `.env`. See [`.env.example`](.env.example) for the full list
 - `GEMINI_API_KEY` — For image generation
 - `CHROME_ENABLED=true` — Chrome browser extension (Claude only)
 - `EDGAR_CONTACT` — Email for SEC EDGAR User-Agent (e.g. `research@example.com`)
-- `TIMEZONE` — Timezone for scheduler (e.g. `America/New_York`)
+- `TIMEZONE` — Timezone for scheduler in IANA format, defaults to UTC (e.g. `America/New_York`, `Europe/London`)
 - `TASK_TIMEOUT` — Max seconds per scheduled task (default: `300`)
 
 ## Optional Features Guide

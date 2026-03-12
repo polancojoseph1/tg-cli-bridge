@@ -51,6 +51,19 @@ CLI_COMMAND: str = os.environ.get("CLI_COMMAND", "")  # auto-detected if empty
 CLI_TIMEOUT: int = int(os.environ.get("CLI_TIMEOUT", "1800"))
 CLI_SYSTEM_PROMPT: str = os.environ.get("CLI_SYSTEM_PROMPT", "")
 
+# Default model name passed to --model flag when creating agents.
+# Override with DEFAULT_AGENT_MODEL env var. Falls back to CLI_RUNNER-specific defaults.
+_RUNNER_DEFAULT_MODELS: dict[str, str] = {
+    "claude": "claude-sonnet-4-6",
+    "gemini": "gemini-2.5-pro",
+    "codex":  "gpt-4o",
+    "qwen":   "qwen2.5-coder:7b",
+}
+DEFAULT_AGENT_MODEL: str = os.environ.get(
+    "DEFAULT_AGENT_MODEL",
+    _RUNNER_DEFAULT_MODELS.get(os.environ.get("CLI_RUNNER", "claude").lower(), "claude-sonnet-4-6"),
+)
+
 # Bot display name — derived from CLI_RUNNER unless overridden
 BOT_NAME: str = os.environ.get("BOT_NAME", "")
 

@@ -35,7 +35,7 @@ brew install ffmpeg
 ### 2. Clone and install
 
 ```bash
-git clone https://github.com/polancojoseph1/tg-cli-bridge.git
+git clone https://github.com/your-username/tg-cli-bridge.git
 cd tg-cli-bridge
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -103,7 +103,7 @@ sudo pacman -S python nodejs npm ffmpeg
 ### 2. Clone and install
 
 ```bash
-git clone https://github.com/polancojoseph1/tg-cli-bridge.git
+git clone https://github.com/your-username/tg-cli-bridge.git
 cd tg-cli-bridge
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -150,7 +150,7 @@ tail -f ~/.local/share/tg-cli-bridge/logs/claude.log
 ### 2. Clone and install
 
 ```cmd
-git clone https://github.com/polancojoseph1/tg-cli-bridge.git
+git clone https://github.com/your-username/tg-cli-bridge.git
 cd tg-cli-bridge
 python -m venv .venv
 .venv\Scripts\activate

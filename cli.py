@@ -377,7 +377,7 @@ def main() -> None:
 
     install_p = sub.add_parser("install", help="Install a named bot instance as a background service")
     install_p.add_argument("--name", required=True, help="Instance name (e.g. claude, gemini)")
-    install_p.add_argument("--port", default="8585", help="Port to run uvicorn on (default: 8585)")
+    install_p.add_argument("--port", default=os.environ.get("PORT", "8588"), help="Port to run uvicorn on (default: PORT env var or 8588)")
 
     uninstall_p = sub.add_parser("uninstall", help="Remove a named service instance")
     uninstall_p.add_argument("--name", required=True, help="Instance name to remove")

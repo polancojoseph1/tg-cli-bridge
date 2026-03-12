@@ -1,10 +1,16 @@
-"""Agent Registry — persistent storage for named specialist agents.
+"""Agent Registry — persistent storage for named specialist agents and skill packs.
 
-Agents are stored in MEMORY_DIR/agents.db (SQLite).
-Each agent has an ID, name, type, system prompt, skill list, model, and collaborators.
+Agents and skills are stored in MEMORY_DIR/agents.db (SQLite).
+
+Each agent has: id, name, type, system prompt, skill list, model, collaborators.
+Each skill has: id, description, prompt (injected into agent system prompts), is_builtin.
 
 Usage:
-    from agent_registry import create_agent, get_agent, list_agents, update_agent, delete_agent
+    from agent_registry import (
+        create_agent, get_agent, list_agents, update_agent, delete_agent,
+        create_skill, get_skill, list_skills_db, update_skill, delete_skill,
+        seed_default_agents, seed_default_skills,
+    )
 """
 
 import json
@@ -16,7 +22,7 @@ from pathlib import Path
 
 logger = logging.getLogger("bridge.agent_registry")
 
-from config import MEMORY_DIR
+from config import MEMORY_DIR, DEFAULT_AGENT_MODEL
 AGENTS_DB = str(Path(MEMORY_DIR) / "agents.db")
 
 _SCHEMA = """
@@ -26,7 +32,7 @@ CREATE TABLE IF NOT EXISTS agents (
     agent_type  TEXT NOT NULL DEFAULT 'custom',
     system_prompt TEXT NOT NULL DEFAULT '',
     skills      TEXT NOT NULL DEFAULT '[]',
-    model       TEXT NOT NULL DEFAULT 'claude-sonnet-4-6',
+    model       TEXT NOT NULL DEFAULT '',
     collaborators TEXT NOT NULL DEFAULT '[]',
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL,
@@ -34,15 +40,28 @@ CREATE TABLE IF NOT EXISTS agents (
     proactive_schedule TEXT NOT NULL DEFAULT '',
     proactive_task TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS skills (
+    id          TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    prompt      TEXT NOT NULL DEFAULT '',
+    is_builtin  INTEGER NOT NULL DEFAULT 0,
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
 """
 
-# Migrations for existing DBs that predate the proactive columns
+# Migrations for existing DBs that predate these columns/tables
 _MIGRATIONS = [
     "ALTER TABLE agents ADD COLUMN proactive INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE agents ADD COLUMN proactive_schedule TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agents ADD COLUMN proactive_task TEXT NOT NULL DEFAULT ''",
+    # skills table added as part of _SCHEMA (CREATE TABLE IF NOT EXISTS — safe to re-run)
 ]
 
+
+# ---------------------------------------------------------------------------
+# Agent dataclass + DB helpers
+# ---------------------------------------------------------------------------
 
 @dataclass
 class AgentDefinition:
@@ -51,19 +70,29 @@ class AgentDefinition:
     agent_type: str = "custom"
     system_prompt: str = ""
     skills: list[str] = field(default_factory=list)
-    model: str = "claude-sonnet-4-6"
+    model: str = field(default_factory=lambda: DEFAULT_AGENT_MODEL)
     collaborators: list[str] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     proactive: bool = False
-    proactive_schedule: str = ""   # HH:MM (NYC time) — when to fire daily
+    proactive_schedule: str = ""   # HH:MM (TIMEZONE env var) — when to fire daily
     proactive_task: str = ""       # the task prompt to run automatically
+
+
+@dataclass
+class SkillDefinition:
+    id: str
+    description: str = ""
+    prompt: str = ""
+    is_builtin: bool = False
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
 
 
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(AGENTS_DB)
     conn.row_factory = sqlite3.Row
-    conn.execute(_SCHEMA)
+    conn.executescript(_SCHEMA)
     conn.commit()
     # Run migrations for existing DBs (fail silently if columns already exist)
     for migration in _MIGRATIONS:
@@ -82,7 +111,7 @@ def _row_to_agent(row: sqlite3.Row) -> AgentDefinition:
         agent_type=row["agent_type"],
         system_prompt=row["system_prompt"],
         skills=json.loads(row["skills"]),
-        model=row["model"],
+        model=row["model"] or DEFAULT_AGENT_MODEL,
         collaborators=json.loads(row["collaborators"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
@@ -92,13 +121,28 @@ def _row_to_agent(row: sqlite3.Row) -> AgentDefinition:
     )
 
 
+def _row_to_skill(row: sqlite3.Row) -> SkillDefinition:
+    return SkillDefinition(
+        id=row["id"],
+        description=row["description"],
+        prompt=row["prompt"],
+        is_builtin=bool(row["is_builtin"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Agent CRUD
+# ---------------------------------------------------------------------------
+
 def create_agent(
     agent_id: str,
     name: str,
     agent_type: str = "custom",
     system_prompt: str = "",
     skills: list[str] | None = None,
-    model: str = "claude-sonnet-4-6",
+    model: str = "",
     collaborators: list[str] | None = None,
 ) -> AgentDefinition:
     """Create and persist a new agent. Raises ValueError if ID already exists."""
@@ -109,7 +153,7 @@ def create_agent(
         agent_type=agent_type,
         system_prompt=system_prompt,
         skills=skills or [],
-        model=model,
+        model=model or DEFAULT_AGENT_MODEL,
         collaborators=collaborators or [],
         created_at=now,
         updated_at=now,
@@ -202,8 +246,116 @@ def delete_agent(agent_id: str) -> bool:
     return deleted
 
 
+# ---------------------------------------------------------------------------
+# Skill CRUD
+# ---------------------------------------------------------------------------
+
+def create_skill(
+    skill_id: str,
+    description: str = "",
+    prompt: str = "",
+    is_builtin: bool = False,
+) -> SkillDefinition:
+    """Create and persist a new skill. Raises ValueError if ID already exists."""
+    now = time.time()
+    skill = SkillDefinition(
+        id=skill_id,
+        description=description,
+        prompt=prompt,
+        is_builtin=is_builtin,
+        created_at=now,
+        updated_at=now,
+    )
+    with _get_conn() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO skills (id, description, prompt, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (skill.id, skill.description, skill.prompt, int(skill.is_builtin), skill.created_at, skill.updated_at),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError(f"Skill '{skill_id}' already exists")
+    logger.info("Created skill: %s", skill_id)
+    return skill
+
+
+def get_skill(skill_id: str) -> SkillDefinition | None:
+    """Get skill by ID. Returns None if not found."""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT * FROM skills WHERE id = ?", (skill_id,)).fetchone()
+    return _row_to_skill(row) if row else None
+
+
+def list_skills_db() -> list[SkillDefinition]:
+    """Return all skills sorted by creation time."""
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM skills ORDER BY is_builtin DESC, created_at").fetchall()
+    return [_row_to_skill(row) for row in rows]
+
+
+def update_skill(skill_id: str, **fields) -> SkillDefinition | None:
+    """Update skill fields. Supported: description, prompt.
+    Returns updated skill or None if not found."""
+    skill = get_skill(skill_id)
+    if not skill:
+        return None
+
+    allowed = {"description", "prompt"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return skill
+
+    updates["updated_at"] = time.time()
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [skill_id]
+
+    with _get_conn() as conn:
+        conn.execute(f"UPDATE skills SET {set_clause} WHERE id = ?", values)
+
+    logger.info("Updated skill %s: %s", skill_id, list(updates.keys()))
+    return get_skill(skill_id)
+
+
+def delete_skill(skill_id: str) -> tuple[bool, str]:
+    """Delete a skill. Returns (True, '') on success or (False, reason) on failure.
+    Built-in skills cannot be deleted."""
+    skill = get_skill(skill_id)
+    if not skill:
+        return False, f"Skill '{skill_id}' not found."
+    if skill.is_builtin:
+        return False, f"'{skill_id}' is a built-in skill and cannot be deleted. Use /skill edit to modify it."
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
+    logger.info("Deleted skill: %s", skill_id)
+    return True, ""
+
+
+# ---------------------------------------------------------------------------
+# Seeding
+# ---------------------------------------------------------------------------
+
+def seed_default_skills() -> int:
+    """Seed built-in skill packs if they don't already exist. Returns count seeded."""
+    from agent_skills import SKILL_PACKS
+    seeded = 0
+    for skill_id, pack in SKILL_PACKS.items():
+        if get_skill(skill_id) is None:
+            try:
+                create_skill(
+                    skill_id=skill_id,
+                    description=pack["description"],
+                    prompt=pack["system_prompt_section"],
+                    is_builtin=True,
+                )
+                seeded += 1
+            except ValueError:
+                pass  # Already exists (race condition)
+    if seeded:
+        logger.info("Seeded %d default skills", seeded)
+    return seeded
+
+
 def seed_default_agents() -> int:
-    """Seed the 3 built-in agents if they don't already exist. Returns count seeded."""
+    """Seed the built-in agents if they don't already exist. Returns count seeded."""
     from agent_skills import DEFAULT_AGENT_PROMPTS
 
     defaults = [
@@ -222,18 +374,18 @@ def seed_default_agents() -> int:
             "collaborators": ["research"],
         },
         {
-            "agent_id": "linkedin",
-            "name": "LinkedIn Expert",
-            "agent_type": "writing",
-            "skills": ["writing"],
-            "collaborators": ["research"],
+            "agent_id": "coding",
+            "name": "Coding Expert",
+            "agent_type": "coding",
+            "skills": ["coding"],
+            "collaborators": [],
         },
         {
             "agent_id": "manager",
             "name": "Manager Agent",
             "agent_type": "manager",
             "skills": ["manager"],
-            "collaborators": ["research", "analytics", "linkedin"],
+            "collaborators": ["research", "analytics", "coding"],
         },
     ]
 

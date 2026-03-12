@@ -31,7 +31,7 @@ import daily_report
 from instance_manager import InstanceManager, Instance
 import router
 import agent_manager
-from agent_registry import create_agent, resolve_agent, list_agents, update_agent, delete_agent, get_agent
+from agent_registry import create_agent, resolve_agent, list_agents, update_agent, delete_agent, get_agent, create_skill, get_skill, list_skills_db, update_skill, delete_skill
 from agent_skills import SKILL_PACKS, list_skills
 
 # Optional modules (graceful degradation if not present)
@@ -217,9 +217,8 @@ def _total_queue_size() -> int:
 async def _init_memory_background() -> None:
     """Initialize vector memory without blocking API startup."""
     try:
-        jefe_count = await memory_handler.index_files(0)
-        secondary_count = await memory_handler.index_files(memory_handler.SECONDARY_USER_ID)
-        logger.info("Memory initialized: %d chunks (primary) + %d chunks (secondary) indexed", jefe_count, secondary_count)
+        primary_count = await memory_handler.index_files(0)
+        logger.info("Memory initialized: %d chunks indexed", primary_count)
     except Exception as e:
         logger.warning("Memory initialization failed (non-fatal): %s", e)
 
@@ -1446,8 +1445,13 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "/agent task <name> <task> \u2014 Assign a one-off task  _→ /agent task News Hound summarize AI news_\n"
             "/agent fix <name> <rule> \u2014 Patch a rule into agent's prompt  _→ /agent fix News Hound always cite sources_\n"
             "/agent feedback <name> <issue> \u2014 Record feedback & auto-improve  _→ /agent feedback News Hound missed the SEC angle_\n"
-            "/agent delete <name> \u2014 Delete an agent\n"
-            "_Types: research, analytics, writing, coding, manager_\n\n"
+            "/agent delete <name> \u2014 Delete an agent\n\n"
+            "**\U0001f9e0 Skills**\n"
+            "/skill list \u2014 Show all skill packs\n"
+            "/skill show <id> \u2014 See a skill's full prompt\n"
+            "/skill create <id> <description> \u2014 Create a custom skill\n"
+            "/skill edit <id> prompt <text> \u2014 Edit a skill's prompt\n"
+            "/skill delete <id> \u2014 Delete a custom skill\n\n"
             "**\U0001f4dc Instances (Multi-Chat)**\n"
             f"_{inst_info}_\n"
             "Each instance is a separate CLI session with its own conversation history. "
@@ -1700,15 +1704,18 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             # /agent create <type> <name>  OR  /agent create <name> (custom type)
             create_parts = arg.split(maxsplit=1)
             if not create_parts:
+                skill_ids = [s.id for s in list_skills_db()] or list(SKILL_PACKS.keys())
                 await send_message(chat_id,
                     "Usage: /agent create &lt;type&gt; &lt;name&gt;\n"
-                    f"Types: {', '.join(SKILL_PACKS.keys())}\n"
-                    "Example: /agent create research My Researcher",
+                    f"Types: {', '.join(skill_ids)}\n"
+                    "Example: /agent create research My Researcher\n\n"
+                    "See /skill list for all available skill types.",
                     parse_mode="HTML")
             else:
                 type_or_name = create_parts[0].lower()
                 is_proactive_type = type_or_name == "proactive"
-                if (type_or_name in SKILL_PACKS or is_proactive_type) and len(create_parts) > 1:
+                skill_ids_set = {s.id for s in list_skills_db()} or set(SKILL_PACKS.keys())
+                if (type_or_name in skill_ids_set or is_proactive_type) and len(create_parts) > 1:
                     agent_type = type_or_name
                     agent_name = create_parts[1]
                 else:
@@ -1723,7 +1730,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                         name=agent_name,
                         agent_type=agent_type,
                         system_prompt=system_prompt,
-                        skills=[agent_type] if agent_type in SKILL_PACKS else [],
+                        skills=[agent_type] if agent_type in skill_ids_set else [],
                     )
                     if is_proactive_type:
                         await send_message(chat_id,
@@ -2068,7 +2075,108 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 "<b>/agent proactive &lt;name&gt; clear</b> — Wipe config\n\n"
                 "<b>/agent delete &lt;name&gt;</b> — Delete an agent\n"
                 "  <i>→ /agent delete News Hound</i>\n\n"
-                f"<b>Types:</b> {', '.join(SKILL_PACKS.keys())}",
+                f"<b>Types:</b> {', '.join(s.id for s in list_skills_db()) or ', '.join(SKILL_PACKS.keys())}  (see /skill list)",
+                parse_mode="HTML")
+
+    elif cmd == "/skill":
+        parts = text.split(maxsplit=2)
+        sub = parts[1].lower() if len(parts) > 1 else ""
+        arg = parts[2] if len(parts) > 2 else ""
+
+        if not sub or sub == "list":
+            skills = list_skills_db()
+            if not skills:
+                await send_message(chat_id, "No skills found. Run /skill list after startup seeding.")
+            else:
+                lines = ["<b>Skills</b>\n"]
+                for s in skills:
+                    tag = "🔒" if s.is_builtin else "✏️"
+                    lines.append(f"{tag} <b>{s.id}</b> — {s.description}")
+                lines.append("\n/skill show &lt;id&gt; — see full prompt")
+                await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+        elif sub == "show":
+            if not arg:
+                await send_message(chat_id, "Usage: /skill show &lt;id&gt;", parse_mode="HTML")
+            else:
+                skill = get_skill(arg.strip())
+                if not skill:
+                    await send_message(chat_id, f"Skill '{arg}' not found. Try /skill list")
+                else:
+                    tag = "🔒 built-in" if skill.is_builtin else "✏️ custom"
+                    msg = (
+                        f"<b>{skill.id}</b> [{tag}]\n"
+                        f"<i>{skill.description}</i>\n\n"
+                        f"<pre>{skill.prompt[:3000]}</pre>"
+                    )
+                    await send_message(chat_id, msg, parse_mode="HTML")
+
+        elif sub == "create":
+            # /skill create <id> <description>
+            create_parts = arg.split(maxsplit=1)
+            if len(create_parts) < 2:
+                await send_message(chat_id,
+                    "Usage: /skill create &lt;id&gt; &lt;description&gt;\n"
+                    "Example: /skill create seo SEO optimization and keyword research\n\n"
+                    "Then set the prompt with:\n"
+                    "/skill edit &lt;id&gt; prompt &lt;your prompt text&gt;",
+                    parse_mode="HTML")
+            else:
+                skill_id = re.sub(r"[^a-z0-9_]", "_", create_parts[0].lower())[:30]
+                description = create_parts[1]
+                try:
+                    new_skill = create_skill(skill_id=skill_id, description=description)
+                    await send_message(chat_id,
+                        f"✅ Skill created: <b>{new_skill.id}</b>\n"
+                        f"Description: {new_skill.description}\n\n"
+                        f"Set the prompt with:\n"
+                        f"<code>/skill edit {new_skill.id} prompt your prompt text here</code>",
+                        parse_mode="HTML")
+                except ValueError as e:
+                    await send_message(chat_id, f"Error: {e}")
+
+        elif sub == "edit":
+            # /skill edit <id> description <text>  OR  /skill edit <id> prompt <text>
+            edit_parts = arg.split(maxsplit=2)
+            if len(edit_parts) < 3:
+                await send_message(chat_id,
+                    "Usage:\n"
+                    "/skill edit &lt;id&gt; description &lt;new description&gt;\n"
+                    "/skill edit &lt;id&gt; prompt &lt;new prompt text&gt;",
+                    parse_mode="HTML")
+            else:
+                skill_id, field_name, value = edit_parts[0], edit_parts[1].lower(), edit_parts[2]
+                if field_name not in ("description", "prompt"):
+                    await send_message(chat_id, "Field must be 'description' or 'prompt'.")
+                else:
+                    updated = update_skill(skill_id, **{field_name: value})
+                    if updated is None:
+                        await send_message(chat_id, f"Skill '{skill_id}' not found. Try /skill list")
+                    else:
+                        await send_message(chat_id,
+                            f"✅ Updated <b>{updated.id}</b> {field_name}.",
+                            parse_mode="HTML")
+
+        elif sub == "delete":
+            if not arg:
+                await send_message(chat_id, "Usage: /skill delete &lt;id&gt;", parse_mode="HTML")
+            else:
+                ok, reason = delete_skill(arg.strip())
+                if ok:
+                    await send_message(chat_id, f"🗑️ Skill <b>{arg}</b> deleted.", parse_mode="HTML")
+                else:
+                    await send_message(chat_id, f"Cannot delete: {reason}")
+
+        else:
+            await send_message(chat_id,
+                "<b>/skill commands</b>\n\n"
+                "/skill list — Show all skills\n"
+                "/skill show &lt;id&gt; — Show full prompt\n"
+                "/skill create &lt;id&gt; &lt;description&gt; — Create new skill\n"
+                "/skill edit &lt;id&gt; description &lt;text&gt; — Edit description\n"
+                "/skill edit &lt;id&gt; prompt &lt;text&gt; — Edit prompt\n"
+                "/skill delete &lt;id&gt; — Delete custom skill (built-ins protected)\n\n"
+                "🔒 = built-in (editable but not deletable)  ✏️ = custom",
                 parse_mode="HTML")
 
     elif cmd == "/orch":

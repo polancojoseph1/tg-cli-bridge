@@ -22,16 +22,16 @@ from pathlib import Path
 
 try:
     import pytz
-    NYC_TZ = pytz.timezone(os.environ.get("TIMEZONE", "America/New_York"))
+    LOCAL_TZ = pytz.timezone(os.environ.get("TIMEZONE", "UTC"))
 except ImportError:
     from zoneinfo import ZoneInfo
     class _PytzCompat:
         def __init__(self, key): self._zi = ZoneInfo(key)
         def localize(self, dt): return dt.replace(tzinfo=self._zi)
         def __call__(self): return self._zi
-    NYC_TZ = ZoneInfo(os.environ.get("TIMEZONE", "America/New_York"))  # type: ignore
+    LOCAL_TZ = ZoneInfo(os.environ.get("TIMEZONE", "UTC"))  # type: ignore
 
-from agent_registry import AgentDefinition, resolve_agent, list_agents, seed_default_agents, get_agent
+from agent_registry import AgentDefinition, resolve_agent, list_agents, seed_default_agents, seed_default_skills, get_agent
 from agent_skills import build_skills_prompt
 from instance_manager import InstanceManager, Instance
 
@@ -247,7 +247,7 @@ def schedule_agent_task(agent_id: str, time_str: str, task_desc: str) -> str:
     except Exception:
         return f"Invalid time '{time_str}'. Use HH:MM format (e.g. 09:00)."
 
-    now = datetime.now(NYC_TZ)
+    now = datetime.now(LOCAL_TZ)
     run_date = now.strftime("%Y-%m-%d")
     scheduled_time = f"{run_date} {h:02d}:{m:02d}"
 
@@ -319,7 +319,13 @@ def format_agent_list(instances: InstanceManager) -> str:
 
 
 def ensure_default_agents() -> None:
-    """Seed the default agents on startup if they don't exist."""
+    """Seed the default agents and skills on startup if they don't exist."""
+    try:
+        skill_count = seed_default_skills()
+        if skill_count:
+            logger.info("Seeded %d default skills on startup", skill_count)
+    except Exception as e:
+        logger.error("Failed to seed default skills: %s", e)
     try:
         count = seed_default_agents()
         if count:
@@ -361,7 +367,7 @@ async def fix_agent_prompt(agent_id: str, rule: str, instances: InstanceManager 
     # Fallback: if Claude failed, just append the rule with a datestamp
     if not updated_prompt or updated_prompt.startswith('{"error"') or "(no response)" in updated_prompt:
         logger.warning("fix_agent_prompt: Claude merge failed, appending rule directly")
-        today = datetime.now(NYC_TZ).strftime("%Y-%m-%d")
+        today = datetime.now(LOCAL_TZ).strftime("%Y-%m-%d")
         updated_prompt = f"{agent.system_prompt}\n\nRULE (added {today}):\n{rule}"
 
     updated = update_agent(agent_id, system_prompt=updated_prompt)
