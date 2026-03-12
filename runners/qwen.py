@@ -235,11 +235,7 @@ class QwenRunner(RunnerBase):
                                 _any_progress_sent = True
                                 await on_progress("\U0001f4c2 Working...")
                         elif block_type == "thinking":
-                            thinking_text = block.get("thinking", block.get("text", ""))
-                            if thinking_text and on_progress:
-                                formatted = self._format_thinking(thinking_text)
-                                if formatted:
-                                    await on_progress(formatted)
+                            pass  # drop silently — only text blocks between tool calls are shown
                         elif block_type == "text":
                             text = block.get("text", "")
                             if text:
