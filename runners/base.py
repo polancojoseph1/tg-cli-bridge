@@ -251,7 +251,7 @@ class RunnerBase(ABC):
         elif name == "read_file":
             return f"\U0001f4c4 Read: {params.get('file_path', params.get('path', params.get('absolute_path', '')))}"
         elif name == "list_directory":
-            return f"\U0001f4c2 List: {params.get('path', '')}"
+            return f"\U0001f4c2 List: {params.get('dir_path', params.get('path', params.get('absolute_path', '')))}"
         elif name in ("grep_search",):
             query = params.get("query", params.get("pattern", ""))
             return f"\U0001f50d Grep: {query[:80]}" if query else "\U0001f50d Grep"
