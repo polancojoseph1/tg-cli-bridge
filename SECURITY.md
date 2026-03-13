@@ -23,7 +23,7 @@ Send a private report to the maintainer:
 **Do not store secrets in the project directory.** Recommended layout:
 
 ```
-~/.config/tg-cli-bridge/        # or any path outside the repo
+~/.config/bridgebot/        # or any path outside the repo
   .env.claude
   .env.gemini
   .env.codex
@@ -31,13 +31,13 @@ Send a private report to the maintainer:
 
 Point each runner at its file:
 ```bash
-export ENV_FILE=~/.config/tg-cli-bridge/.env.claude
+export ENV_FILE=~/.config/bridgebot/.env.claude
 ```
 
 Keep permissions tight:
 ```bash
-chmod 700 ~/.config/tg-cli-bridge/
-chmod 600 ~/.config/tg-cli-bridge/.env.*
+chmod 700 ~/.config/bridgebot/
+chmod 600 ~/.config/bridgebot/.env.*
 ```
 
 The project ships a `.gitignore` that excludes `.env`, `.env.*`, and common secret file names. **Never commit real tokens.**

@@ -24,7 +24,7 @@ from typing import AsyncGenerator, Callable, Awaitable, Any
 # Subprocess logger wrapper script path
 _SUBPROCESS_LOGGER = os.path.join(os.path.dirname(__file__), "subprocess_logger.py")
 _LOG_DIR = os.path.join(
-    os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.tg-cli-bridge")),
+    os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.bridgebot")),
     "subprocess_logs",
 )
 

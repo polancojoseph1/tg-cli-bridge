@@ -26,7 +26,7 @@ from pathlib import Path
 logger = logging.getLogger("bridge.collab.feed")
 
 _FEED_MAX = 50
-_DATA_DIR = os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.tg-cli-bridge"))
+_DATA_DIR = os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.bridgebot"))
 _FEED_FILE = os.path.join(_DATA_DIR, "collab_feed.json")
 
 _lock = asyncio.Lock()

@@ -77,7 +77,7 @@ class TestDataDir:
         import importlib
         import config
         importlib.reload(config)
-        assert config.DATA_DIR.endswith(".tg-cli-bridge")
+        assert config.DATA_DIR.endswith(".bridgebot")
 
     def test_custom_data_dir(self, monkeypatch):
         os.environ["TG_BRIDGE_DATA_DIR"] = "/tmp/my-bridge-data"

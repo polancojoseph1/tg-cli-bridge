@@ -218,10 +218,7 @@ class ClaudeRunner(RunnerBase):
                         text = text[:text.index(fence)]
                 text = text.strip()
                 if text:
-                    # Take just the first paragraph
-                    first_para = text.split("\n\n")[0].strip()
-                    if first_para:
-                        await on_progress(f"\U0001f4ad {first_para[:200]}")
+                    await on_progress(f"\U0001f4ad {text}")
             _pending_text = ""
 
         async def process_stream():

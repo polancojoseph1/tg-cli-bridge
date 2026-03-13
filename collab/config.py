@@ -19,7 +19,7 @@ COLLAB_INSTANCE_NAME: str = os.environ.get("COLLAB_INSTANCE_NAME", "")
 COLLAB_TOKEN: str = os.environ.get("COLLAB_TOKEN", "")  # inbound auth token others send to reach us
 
 # Peer file location
-_DATA_DIR = os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.tg-cli-bridge"))
+_DATA_DIR = os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.bridgebot"))
 _PEERS_FILE = os.path.join(_DATA_DIR, "collab_peers.json")
 
 

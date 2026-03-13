@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive setup wizard for tg-cli-bridge.
+"""Interactive setup wizard for bridgebot.
 
 Run:  python setup_wizard.py
 
@@ -584,7 +584,7 @@ def step_cli_runner(existing: dict):
     print("  Step 3: Choose Your AI")
     print("=" * 46)
     print()
-    print("  tg-cli-bridge connects your Telegram bot to an AI")
+    print("  bridgebot connects your Telegram bot to an AI")
     print("  coding assistant that runs on your computer.")
     print()
     print("  Which AI do you want to chat with through Telegram?")
@@ -1017,7 +1017,7 @@ def run_bot(existing: dict):
 
     mode = f"webhook -> {webhook}" if webhook else "polling (no webhook URL set)"
     print()
-    print(f"    Starting tg-cli-bridge on {host}:{port}...")
+    print(f"    Starting bridgebot on {host}:{port}...")
     print(f"    Mode: {mode}")
     print("    Press Ctrl+C to stop.")
     print()
@@ -1260,7 +1260,7 @@ def _main():
     # Welcome
     print()
     print("=" * 46)
-    print("  tg-cli-bridge Setup")
+    print("  bridgebot Setup")
     print("=" * 46)
 
     if first_run:

@@ -40,8 +40,8 @@ npm install -g @openai/codex
 ### 2. Clone and set up
 
 ```bash
-git clone https://github.com/your-username/tg-cli-bridge.git
-cd tg-cli-bridge
+git clone https://github.com/your-username/bridgebot.git
+cd bridgebot
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -207,7 +207,7 @@ To install optional packages, uncomment the relevant lines in `requirements.txt`
 ## Architecture
 
 ```
-tg-cli-bridge/
+bridgebot/
 ├── setup_wizard.py        # Interactive setup — run this first
 ├── server.py              # FastAPI webhook server
 ├── config.py              # Environment config

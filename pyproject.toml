@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "tg-cli-bridge"
+name = "bridgebot"
 version = "0.1.0"
 description = "Talk to any AI CLI through Telegram"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tg-cli-bridge = "cli:main"
+bridgebot = "cli:main"
 
 [tool.setuptools]
 py-modules = ["cli"]

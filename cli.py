@@ -1,4 +1,4 @@
-"""tg-cli-bridge CLI — install and manage bot instances as persistent background services.
+"""bridgebot CLI — install and manage bot instances as persistent background services.
 
 Supports:
   macOS  — LaunchAgents (~~/Library/LaunchAgents/*.plist)
@@ -67,7 +67,7 @@ PLIST_TEMPLATE = """\
 
 SYSTEMD_TEMPLATE = """\
 [Unit]
-Description=tg-cli-bridge ({name})
+Description=bridgebot ({name})
 After=network.target
 
 [Service]
@@ -124,12 +124,12 @@ def _install_macos(name: str, port: str, project_dir: Path) -> None:
     home = str(Path.home())
     pyver = _python_version()
 
-    logs_dir = Path.home() / "Library" / "Logs" / "tg-cli-bridge"
+    logs_dir = Path.home() / "Library" / "Logs" / "bridgebot"
     agents_dir = Path.home() / "Library" / "LaunchAgents"
     logs_dir.mkdir(parents=True, exist_ok=True)
     agents_dir.mkdir(parents=True, exist_ok=True)
 
-    label = f"tg-cli-bridge.{name}"
+    label = f"bridgebot.{name}"
     plist_path = agents_dir / f"{label}.plist"
     log_path = logs_dir / f"{name}.log"
     err_path = logs_dir / f"{name}.err.log"
@@ -155,7 +155,7 @@ def _install_macos(name: str, port: str, project_dir: Path) -> None:
 
 
 def _uninstall_macos(name: str) -> None:
-    label = f"tg-cli-bridge.{name}"
+    label = f"bridgebot.{name}"
     plist_path = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
     subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
     if plist_path.exists():
@@ -168,13 +168,13 @@ def _uninstall_macos(name: str) -> None:
 
 def _list_macos() -> None:
     agents_dir = Path.home() / "Library" / "LaunchAgents"
-    plists = sorted(agents_dir.glob("tg-cli-bridge.*.plist"))
+    plists = sorted(agents_dir.glob("bridgebot.*.plist"))
     if not plists:
-        print("No tg-cli-bridge instances installed.")
+        print("No bridgebot instances installed.")
         return
     print(f"{'NAME':<20} PLIST")
     for p in plists:
-        name = p.stem.removeprefix("tg-cli-bridge.")
+        name = p.stem.removeprefix("bridgebot.")
         print(f"{name:<20} {p}")
 
 
@@ -188,11 +188,11 @@ def _install_linux(name: str, port: str, project_dir: Path) -> None:
     pyver = _python_version()
 
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
-    logs_dir = Path.home() / ".local" / "share" / "tg-cli-bridge" / "logs"
+    logs_dir = Path.home() / ".local" / "share" / "bridgebot" / "logs"
     systemd_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    unit_name = f"tg-cli-bridge-{name}.service"
+    unit_name = f"bridgebot-{name}.service"
     unit_path = systemd_dir / unit_name
     log_path = logs_dir / f"{name}.log"
     err_path = logs_dir / f"{name}.err.log"
@@ -214,7 +214,7 @@ def _install_linux(name: str, port: str, project_dir: Path) -> None:
 
 
 def _uninstall_linux(name: str) -> None:
-    unit_name = f"tg-cli-bridge-{name}.service"
+    unit_name = f"bridgebot-{name}.service"
     unit_path = Path.home() / ".config" / "systemd" / "user" / unit_name
     subprocess.run(["systemctl", "--user", "disable", "--now", unit_name], capture_output=True)
     if unit_path.exists():
@@ -228,13 +228,13 @@ def _uninstall_linux(name: str) -> None:
 
 def _list_linux() -> None:
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
-    units = sorted(systemd_dir.glob("tg-cli-bridge-*.service"))
+    units = sorted(systemd_dir.glob("bridgebot-*.service"))
     if not units:
-        print("No tg-cli-bridge instances installed.")
+        print("No bridgebot instances installed.")
         return
     print(f"{'NAME':<20} UNIT FILE")
     for u in units:
-        name = u.stem.removeprefix("tg-cli-bridge-")
+        name = u.stem.removeprefix("bridgebot-")
         print(f"{name:<20} {u}")
 
 
@@ -243,7 +243,7 @@ def _list_linux() -> None:
 # ---------------------------------------------------------------------------
 
 def _task_name(name: str) -> str:
-    return f"tg-cli-bridge-{name}"
+    return f"bridgebot-{name}"
 
 
 def _install_windows(name: str, port: str, project_dir: Path) -> None:
@@ -325,14 +325,14 @@ def _list_windows() -> None:
     )
     found = []
     for line in result.stdout.splitlines():
-        if "tg-cli-bridge-" in line:
+        if "bridgebot-" in line:
             found.append(line.strip())
     if not found:
-        print("No tg-cli-bridge instances found in Task Scheduler.")
+        print("No bridgebot instances found in Task Scheduler.")
         return
     print(f"{'NAME':<30} TASK")
     for entry in found:
-        name = entry.split("tg-cli-bridge-")[-1].strip()
+        name = entry.split("bridgebot-")[-1].strip()
         print(f"{name:<30} {entry}")
 
 
@@ -370,8 +370,8 @@ def cmd_list(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="tg-cli-bridge",
-        description="Manage tg-cli-bridge bot instances as persistent background services",
+        prog="bridgebot",
+        description="Manage bridgebot bot instances as persistent background services",
     )
     sub = parser.add_subparsers(dest="command", metavar="COMMAND")
 
@@ -382,7 +382,7 @@ def main() -> None:
     uninstall_p = sub.add_parser("uninstall", help="Remove a named service instance")
     uninstall_p.add_argument("--name", required=True, help="Instance name to remove")
 
-    sub.add_parser("list", help="List installed tg-cli-bridge service instances")
+    sub.add_parser("list", help="List installed bridgebot service instances")
 
     args = parser.parse_args()
 

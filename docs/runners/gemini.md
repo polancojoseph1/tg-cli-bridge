@@ -46,6 +46,6 @@ gemini -p "<prompt>" --yolo --output-format stream-json
 
 ## Troubleshooting
 
-- **Blank progress for file listings** — update to latest tg-cli-bridge (fixed in v0.3.x)
+- **Blank progress for file listings** — update to latest bridgebot (fixed in v0.3.x)
 - **Auth expired** — run `gemini` in terminal to re-authenticate
 - **"gemini: command not found"** — reinstall: `npm install -g @google/gemini-cli`

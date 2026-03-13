@@ -1,6 +1,6 @@
 # Installation Guide
 
-Platform-specific setup instructions for tg-cli-bridge.
+Platform-specific setup instructions for bridgebot.
 
 ## Prerequisites (all platforms)
 
@@ -35,8 +35,8 @@ brew install ffmpeg
 ### 2. Clone and install
 
 ```bash
-git clone https://github.com/your-username/tg-cli-bridge.git
-cd tg-cli-bridge
+git clone https://github.com/your-username/bridgebot.git
+cd bridgebot
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -70,10 +70,10 @@ python setup_wizard.py
 python cli.py install --name claude --port 8588
 
 # Check status
-launchctl list | grep tg-cli-bridge
+launchctl list | grep bridgebot
 
 # View logs
-tail -f ~/Library/Logs/tg-cli-bridge/claude.log
+tail -f ~/Library/Logs/bridgebot/claude.log
 ```
 
 ---
@@ -103,8 +103,8 @@ sudo pacman -S python nodejs npm ffmpeg
 ### 2. Clone and install
 
 ```bash
-git clone https://github.com/your-username/tg-cli-bridge.git
-cd tg-cli-bridge
+git clone https://github.com/your-username/bridgebot.git
+cd bridgebot
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -129,12 +129,12 @@ python setup_wizard.py
 python cli.py install --name claude --port 8588
 
 # Check status
-systemctl --user status tg-cli-bridge-claude
+systemctl --user status bridgebot-claude
 
 # View logs
-journalctl --user -u tg-cli-bridge-claude -f
+journalctl --user -u bridgebot-claude -f
 # or:
-tail -f ~/.local/share/tg-cli-bridge/logs/claude.log
+tail -f ~/.local/share/bridgebot/logs/claude.log
 ```
 
 ---
@@ -150,8 +150,8 @@ tail -f ~/.local/share/tg-cli-bridge/logs/claude.log
 ### 2. Clone and install
 
 ```cmd
-git clone https://github.com/your-username/tg-cli-bridge.git
-cd tg-cli-bridge
+git clone https://github.com/your-username/bridgebot.git
+cd bridgebot
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -186,14 +186,14 @@ This creates a Task Scheduler entry that starts on login. If [NSSM](https://nssm
 cp .env.example .env
 # edit .env with your bot token, user ID, and CLI_RUNNER
 
-docker build -t tg-cli-bridge .
+docker build -t bridgebot .
 docker run -d \
-  --name tg-cli-bridge \
+  --name bridgebot \
   -p 8588:8588 \
-  -v ~/.tg-cli-bridge:/data \
+  -v ~/.bridgebot:/data \
   --env-file .env \
   -e TG_BRIDGE_DATA_DIR=/data \
-  tg-cli-bridge
+  bridgebot
 ```
 
 > Note: Docker mode does not include an AI CLI binary. Mount one into the container or use `CLI_RUNNER=generic` with a CLI accessible from inside the container.

@@ -1,4 +1,4 @@
-"""Unified configuration for tg-cli-bridge.
+"""Unified configuration for bridgebot.
 
 All settings are loaded from environment variables (via .env file).
 Users select their CLI runner with CLI_RUNNER=claude|gemini|codex|generic.
@@ -81,8 +81,8 @@ MEMORY_COLLECTION: str = os.environ.get("MEMORY_COLLECTION", "telegram_bridge")
 MEMORY_TOP_K: int = int(os.environ.get("MEMORY_TOP_K", "5"))
 
 # Data directory for runtime files (session DB, logs, pid files)
-# Override with TG_BRIDGE_DATA_DIR env var. Defaults to ~/.tg-cli-bridge
-DATA_DIR: str = os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.tg-cli-bridge"))
+# Override with TG_BRIDGE_DATA_DIR env var. Defaults to ~/.bridgebot
+DATA_DIR: str = os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.bridgebot"))
 
 # Your first name — used to personalize the bot's greetings and memory context
 USER_NAME: str = os.environ.get("USER_NAME", "")

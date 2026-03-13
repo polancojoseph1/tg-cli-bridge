@@ -12,6 +12,9 @@ pydantic>=2.0.0
 # faster-whisper>=0.7.0
 # edge-tts>=6.1.0
 
+# Optional: Browser automation — enables /screenshot and /browse commands (requires: playwright install chromium)
+# playwright>=1.50.0
+
 # Optional: Screen recording — enables /record and /stoprecord (macOS only)
 # Pillow>=10.0.0
 

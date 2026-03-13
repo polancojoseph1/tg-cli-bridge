@@ -5,10 +5,10 @@
 **Check 1: Is the server running?**
 ```bash
 # macOS (LaunchAgent)
-launchctl list | grep tg-cli-bridge
+launchctl list | grep bridgebot
 
 # Linux (systemd)
-systemctl --user status tg-cli-bridge-claude
+systemctl --user status bridgebot-claude
 
 # Manual start
 python -m uvicorn server:app --host 0.0.0.0 --port 8588
@@ -122,21 +122,21 @@ This is usually a stale webhook or a crashed process.
 **Check logs:**
 ```bash
 # macOS LaunchAgent logs
-tail -100 ~/Library/Logs/tg-cli-bridge/claude.err.log
+tail -100 ~/Library/Logs/bridgebot/claude.err.log
 
 # Systemd logs
-journalctl --user -u tg-cli-bridge-claude --since "1 hour ago"
+journalctl --user -u bridgebot-claude --since "1 hour ago"
 ```
 
 **Restart the service:**
 ```bash
 # macOS
-launchctl unload ~/Library/LaunchAgents/tg-cli-bridge.claude.plist
+launchctl unload ~/Library/LaunchAgents/bridgebot.claude.plist
 sleep 2
-launchctl load ~/Library/LaunchAgents/tg-cli-bridge.claude.plist
+launchctl load ~/Library/LaunchAgents/bridgebot.claude.plist
 
 # Linux
-systemctl --user restart tg-cli-bridge-claude
+systemctl --user restart bridgebot-claude
 
 # Telegram
 /server   (send this to the bot in Telegram)
@@ -204,14 +204,14 @@ pip install onnxruntime
 LOG_LEVEL=DEBUG python -m uvicorn server:app --host 0.0.0.0 --port 8588
 
 # Or tail the subprocess logs (one per CLI process)
-ls ~/.tg-cli-bridge/subprocess_logs/
-tail -f ~/.tg-cli-bridge/subprocess_logs/*.log
+ls ~/.bridgebot/subprocess_logs/
+tail -f ~/.bridgebot/subprocess_logs/*.log
 ```
 
 ---
 
 ## Still stuck?
 
-1. Check [existing issues](https://github.com/your-username/tg-cli-bridge/issues)
+1. Check [existing issues](https://github.com/your-username/bridgebot/issues)
 2. Run `/status` in Telegram for runtime diagnostics
 3. Open a new issue with: OS, Python version, CLI runner, and the relevant log lines

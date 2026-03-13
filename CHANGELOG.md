@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to tg-cli-bridge are documented here.
+All notable changes to bridgebot are documented here.
 
 Format: [Semantic Versioning](https://semver.org/)
 
@@ -9,7 +9,7 @@ Format: [Semantic Versioning](https://semver.org/)
 ## [Unreleased]
 
 ### Added
-- `TG_BRIDGE_DATA_DIR` env var — override default runtime data directory (`~/.tg-cli-bridge`)
+- `TG_BRIDGE_DATA_DIR` env var — override default runtime data directory (`~/.bridgebot`)
 - `EDGAR_CONTACT` warning when unset, avoids silent fake-email fallback
 - `check_system_deps()` in setup wizard — checks for node/npm, ffmpeg, tailscale, cloudflared
 - `/help` now shows memory status (ON/OFF), ffmpeg availability, and voice TTS status

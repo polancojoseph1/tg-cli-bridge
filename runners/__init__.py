@@ -1,4 +1,4 @@
-"""CLI runner adapters for tg-cli-bridge.
+"""CLI runner adapters for bridgebot.
 
 Factory function creates the appropriate runner based on CLI_RUNNER config.
 """

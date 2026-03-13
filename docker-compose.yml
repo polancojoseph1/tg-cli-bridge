@@ -1,5 +1,5 @@
 services:
-  tg-cli-bridge:
+  bridgebot:
     build: .
     ports:
       - "${PORT:-8588}:${PORT:-8588}"

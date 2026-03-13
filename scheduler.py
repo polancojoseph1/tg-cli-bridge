@@ -35,7 +35,7 @@ _DEFAULT_TIMEOUT = 300  # seconds per task run
 def _get_db_path() -> str:
     import os
     data_dir = Path(os.path.expanduser(
-        os.environ.get("TG_BRIDGE_DATA_DIR", "~/.tg-cli-bridge")
+        os.environ.get("TG_BRIDGE_DATA_DIR", "~/.bridgebot")
     ))
     data_dir.mkdir(parents=True, exist_ok=True)
     return str(data_dir / "schedules.db")

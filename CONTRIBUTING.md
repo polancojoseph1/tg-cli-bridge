@@ -1,12 +1,12 @@
-# Contributing to tg-cli-bridge
+# Contributing to bridgebot
 
 Thanks for your interest! This guide covers how to set up a dev environment, add new runners or optional modules, and submit a PR.
 
 ## Dev Setup
 
 ```bash
-git clone https://github.com/your-username/tg-cli-bridge.git
-cd tg-cli-bridge
+git clone https://github.com/your-username/bridgebot.git
+cd bridgebot
 
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
