@@ -75,14 +75,22 @@ def spawn_agent(agent_id: str, instances: InstanceManager, owner_id: int = 0) ->
 def get_running_instance(agent_id: str, instances: InstanceManager) -> Instance | None:
     """Return the currently running instance for this agent, or None."""
     inst_id = _agent_instance_map.get(agent_id)
-    if inst_id is None:
-        return None
-    inst = instances.get(inst_id)
-    if inst is None:
+    if inst_id is not None:
+        inst = instances.get(inst_id)
+        if inst is not None:
+            return inst
         # Instance was removed — clean up mapping
         _agent_instance_map.pop(agent_id, None)
-        return None
-    return inst
+
+    # Fallback: scan all instances for a matching agent_id.
+    # Handles cases where _agent_instance_map was cleared (e.g. server restart)
+    # so a second trigger doesn't spawn a duplicate instance.
+    for inst in instances.list_all():
+        if inst.agent_id == agent_id:
+            _agent_instance_map[agent_id] = inst.id  # re-register for fast lookups
+            return inst
+
+    return None
 
 
 def get_or_spawn(agent_id: str, instances: InstanceManager, owner_id: int = 0) -> Instance | None:

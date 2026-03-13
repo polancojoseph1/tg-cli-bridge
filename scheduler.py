@@ -320,12 +320,8 @@ def _run_task_sync(row: dict, cli_cmd: str, bot_token: str, chat_id_str: str) ->
 
     prompt = (
         f"SCHEDULED TASK #{task_id}: {description}\n\n"
-        f"Complete this task autonomously. Be concise.\n\n"
-        f"When done, send a brief Telegram summary using:\n"
-        f"curl -s -X POST 'https://api.telegram.org/bot{bot_token}/sendMessage' "
-        f"-H 'Content-Type: application/json' "
-        f"-d '{{\"chat_id\": {chat_id_str}, \"text\": \"✅ Task #{task_id} done: <summary>\"}}'  \n\n"
-        f"Do not just describe what you would do — actually do it."
+        f"Complete this task autonomously. Be concise.\n"
+        f"When you are done, output a one-line summary of what you did."
     )
 
     env = os.environ.copy()
@@ -333,12 +329,15 @@ def _run_task_sync(row: dict, cli_cmd: str, bot_token: str, chat_id_str: str) ->
 
     try:
         result = subprocess.run(
-            [cli_cmd, "-p", "--dangerously-skip-permissions", prompt],
+            [cli_cmd, "-p", prompt],
             capture_output=True, text=True, env=env,
             timeout=_DEFAULT_TIMEOUT,
         )
         if result.returncode != 0:
             logger.warning("Task #%s exited %s", task_id, result.returncode)
+        else:
+            summary = result.stdout.strip()[-500:] or "done"
+            _notify(bot_token, chat_id_str, f"✅ Task #{task_id} done: {summary}")
     except subprocess.TimeoutExpired:
         logger.error("Task #%s timed out after %ss", task_id, _DEFAULT_TIMEOUT)
         _notify(bot_token, chat_id_str,
