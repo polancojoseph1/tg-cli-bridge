@@ -1453,6 +1453,24 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         await runner.kill_all()
         await send_message(chat_id, "\U0001f480 Killed all Claude processes. All queues cleared.")
 
+    elif cmd == "/clear":
+        # Kill all processes, remove all instances, reset to one Default
+        all_insts = instances.list_all(for_owner_id=owner_id)
+        count = len(all_insts)
+        for inst in all_insts:
+            await runner.stop(inst)
+            inst.clear_queue()
+            if inst.current_task and not inst.current_task.done():
+                inst.current_task.cancel()
+        for inst in all_insts[1:]:
+            instances.remove(inst.id, owner_id=owner_id)
+        surviving = instances.list_all(for_owner_id=owner_id)[0]
+        instances.rename(surviving.id, "Default", owner_id=owner_id)
+        instances.set_active_for(owner_id, surviving.id)
+        runner.new_session(surviving)
+        _session_store.mark_resolved(chat_id, CLI_RUNNER, surviving.id)
+        await send_message(chat_id, f"\U0001f9f9 Cleared {count} instance{'s' if count != 1 else ''}. Fresh start.")
+
     elif cmd in ("/show", "/hide"):
         sub = text.split(maxsplit=1)[1].lower().strip() if len(text.split()) > 1 else ""
         if sub == "code":
@@ -1495,6 +1513,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "**Control**\n"
             "/stop \u2014 Stop current task & clear queue\n"
             "/kill \u2014 Force-kill all processes across all instances\n"
+            "/clear \u2014 Kill all instances, reset to one Default\n"
             "/new \u2014 Reset conversation for the active instance\n"
             "/server \u2014 Restart bridge server\n"
             f"/model sonnet|opus \u2014 Switch model [{(active.model.split('-')[1] if '-' in active.model else active.model).capitalize()}]\n\n"
@@ -1508,7 +1527,6 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "/inst switch <id/title> [new_title] \u2014 Switch/create/rename\n"
             "/inst rename <id> <title>\n"
             "/inst end <id>\n"
-            "/inst clear \u2014 Kill all, reset to one Default\n"
             "_`@<id or name> <msg>` \u2014 One-shot message to any instance_\n\n"
             "**Agents**\n"
             "/agent talk <name> \u2014 Switch to an agent\n"
@@ -1671,29 +1689,6 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                     else:
                         await send_message(chat_id, f"No instance #{disp_num}. Try /inst list")
 
-        elif sub == "clear":
-            # Kill all processes, remove all instances, start fresh with one Default
-            all_insts = instances.list_all(for_owner_id=owner_id)
-            count = len(all_insts)
-            for inst in all_insts:
-                await runner.stop(inst)
-                inst.clear_queue()
-                if inst.current_task and not inst.current_task.done():
-                    inst.current_task.cancel()
-            # Remove all except keep one to satisfy the "can't remove last" guard,
-            # then rename it to Default and reset its session
-            for inst in all_insts[1:]:
-                instances.remove(inst.id, owner_id=owner_id)
-            surviving = instances.list_all(for_owner_id=owner_id)[0]
-            instances.rename(surviving.id, "Default", owner_id=owner_id)
-            instances.set_active_for(owner_id, surviving.id)
-            runner.new_session(surviving)
-            _session_store.mark_resolved(chat_id, CLI_RUNNER, surviving.id)
-            await send_message(
-                chat_id,
-                f"\U0001f9f9 Cleared {count} instance{'s' if count != 1 else ''}. Back to a single Default.",
-            )
-
         else:
             inst = instances.get_active_for(owner_id)
             await send_message(
@@ -1704,8 +1699,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 f"/inst list \u2014 Show all instances\n"
                 f"/inst switch &lt;id/title&gt; [new_title] \u2014 Switch/Create/Rename\n"
                 f"/inst rename &lt;id&gt; &lt;title&gt; \u2014 Rename\n"
-                f"/inst end &lt;id&gt; \u2014 End instance\n"
-                f"/inst clear \u2014 Kill all, reset to one Default",
+                f"/inst end &lt;id&gt; \u2014 End instance",
                 parse_mode="HTML",
             )
 
