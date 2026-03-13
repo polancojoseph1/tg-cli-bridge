@@ -15,7 +15,7 @@ logger = logging.getLogger("bridge.collab.config")
 # ── Module-level settings ────────────────────────────────────────────────────
 
 COLLAB_ENABLED: bool = os.environ.get("COLLAB_ENABLED", "true").lower() in ("true", "1", "yes")
-COLLAB_INSTANCE_NAME: str = os.environ.get("COLLAB_INSTANCE_NAME", "jefe")
+COLLAB_INSTANCE_NAME: str = os.environ.get("COLLAB_INSTANCE_NAME", "")
 COLLAB_TOKEN: str = os.environ.get("COLLAB_TOKEN", "")  # inbound auth token others send to reach us
 
 # Peer file location

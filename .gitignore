@@ -37,3 +37,8 @@ Thumbs.db
 .env.claude
 .env.gemini
 .env.codex
+
+# Collab runtime files (live in TG_BRIDGE_DATA_DIR, never in repo)
+collab_peers.json
+collab_feed.json
+user_preferences.db

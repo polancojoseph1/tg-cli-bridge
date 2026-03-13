@@ -144,7 +144,7 @@ DISPLAY_SHOW_THOUGHTS: bool = os.environ.get("DISPLAY_SHOW_THOUGHTS", "true").lo
 
 # === Collab (federated peer networking) ===
 COLLAB_ENABLED: bool = os.environ.get("COLLAB_ENABLED", "true").lower() in ("true", "1", "yes")
-COLLAB_INSTANCE_NAME: str = os.environ.get("COLLAB_INSTANCE_NAME", "jefe")
+COLLAB_INSTANCE_NAME: str = os.environ.get("COLLAB_INSTANCE_NAME", "")
 COLLAB_TOKEN: str = os.environ.get("COLLAB_TOKEN", "")  # inbound auth token for this instance
 
 
