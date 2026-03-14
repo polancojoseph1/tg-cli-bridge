@@ -32,7 +32,6 @@ except ImportError:
     _playwright_available = False
 from voice_handler import download_voice, transcribe_audio, text_to_speech, cleanup_file
 import memory_handler
-import display_prefs
 import task_handler
 import daily_report
 from instance_manager import InstanceManager, Instance
@@ -1080,18 +1079,11 @@ async def _process_message(chat_id: int, text: str, voice_reply: bool = False, i
     else:
         memory_context = await memory_handler.search_memory(text, user_id=user_id)
 
-    _prefs = display_prefs.get_display_prefs(user_id)
-
     async def on_progress(progress_text: str):
         if progress_text.startswith("<blockquote"):
-            if not _prefs["show_thoughts"]:
-                return  # user doesn't want to see thoughts
-            # HTML thinking block — send with HTML parse mode, minimal instance label
             inst_label = f"[#{instances.display_num(inst.id, proc_owner_id)}: {inst.title}] " if len(instances.list_all(for_owner_id=proc_owner_id)) >= 2 else ""
             await send_message(chat_id, f"{inst_label}{progress_text}", parse_mode="HTML")
         else:
-            if not _prefs["show_tools"]:
-                return  # user doesn't want to see tool indicators
             await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
 
     # --- Session store: mark this instance as actively processing ---
@@ -1205,17 +1197,11 @@ async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", 
 
     start = time.time()
 
-    _prefs = display_prefs.get_display_prefs(user_id)
-
     async def on_progress(progress_text: str):
         if progress_text.startswith("<blockquote"):
-            if not _prefs["show_thoughts"]:
-                return  # user doesn't want to see thoughts
             inst_label = f"[#{instances.display_num(inst.id, proc_owner_id)}: {inst.title}] " if len(instances.list_all(for_owner_id=proc_owner_id)) >= 2 else ""
             await send_message(chat_id, f"{inst_label}{progress_text}", parse_mode="HTML")
         else:
-            if not _prefs["show_tools"]:
-                return  # user doesn't want to see tool indicators
             await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
 
     sender_name = USER_NAMES.get(user_id, "") if user_id else ""
@@ -1274,17 +1260,11 @@ async def _process_voice_message(chat_id: int, file_id: str, caption: str = "", 
 
     memory_context = await memory_handler.search_memory(raw_prompt, user_id=user_id)
 
-    _prefs = display_prefs.get_display_prefs(user_id)
-
     async def on_progress(progress_text: str):
         if progress_text.startswith("<blockquote"):
-            if not _prefs["show_thoughts"]:
-                return  # user doesn't want to see thoughts
             inst_label = f"[#{instances.display_num(inst.id, proc_owner_id)}: {inst.title}] " if len(instances.list_all(for_owner_id=proc_owner_id)) >= 2 else ""
             await send_message(chat_id, f"{inst_label}{progress_text}", parse_mode="HTML")
         else:
-            if not _prefs["show_tools"]:
-                return  # user doesn't want to see tool indicators
             await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
 
     response = await runner.run(prompt, on_progress=on_progress, memory_context=memory_context, instance=inst)
@@ -1414,6 +1394,23 @@ async def _delayed_restart() -> None:
 
 async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
     cmd = text.split()[0].lower()
+
+    # Short aliases — expand to canonical form before any logic runs
+    _aliases = {
+        "/rename":  "/inst rename",
+        "/end":     "/inst end",
+        "/talk":    "/agent talk",
+        "/back":    "/agent back",
+        "/proact":  "/agent proactive",
+        "/pipe":    "/agent pipeline",
+        "/ask":     "/collab ask",
+        "/blast":   "/collab broadcast",
+        "/run":     "/trigger run",
+    }
+    if cmd in _aliases:
+        text = _aliases[cmd] + text[len(cmd):]
+        cmd = text.split()[0].lower()
+
     # owner_id=0 means primary user pool; non-zero means that user's own pool
     owner_id = 0 if user_id == ALLOWED_USER_ID else user_id
 
@@ -1471,21 +1468,6 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         _session_store.mark_resolved(chat_id, CLI_RUNNER, surviving.id)
         await send_message(chat_id, f"\U0001f9f9 Cleared {count} instance{'s' if count != 1 else ''}. Fresh start.")
 
-    elif cmd in ("/show", "/hide"):
-        sub = text.split(maxsplit=1)[1].lower().strip() if len(text.split()) > 1 else ""
-        if sub == "code":
-            prefs = display_prefs.set_display_prefs(user_id, show_tools=(cmd == "/show"))
-            await send_message(chat_id, "Tool indicators on \u26a1" if prefs["show_tools"] else "Tool indicators off")
-        elif sub == "thoughts":
-            prefs = display_prefs.set_display_prefs(user_id, show_thoughts=(cmd == "/show"))
-            await send_message(chat_id, "Thinking blocks on \U0001f4ad" if prefs["show_thoughts"] else "Thinking blocks off")
-        elif sub == "both":
-            val = (cmd == "/show")
-            display_prefs.set_display_prefs(user_id, show_tools=val, show_thoughts=val)
-            await send_message(chat_id, "Showing everything \u26a1\U0001f4ad" if val else "Clean output \u2014 just final answers")
-        else:
-            await send_message(chat_id, f"Usage: {cmd} code | thoughts | both")
-
     elif cmd == "/new":
         inst = instances.get_active_for(owner_id)
         inst.clear_queue()
@@ -1517,34 +1499,27 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "/new \u2014 Reset conversation for the active instance\n"
             "/server \u2014 Restart bridge server\n"
             f"/model sonnet|opus \u2014 Switch model [{(active.model.split('-')[1] if '-' in active.model else active.model).capitalize()}]\n\n"
-            "**Display**\n"
-            "/show code | thoughts | both\n"
-            "/hide code | thoughts | both\n\n"
             "**Instances**\n"
             f"_{inst_info}_\n"
-            "/inst new <title> \u2014 New independent session\n"
-            "/inst list \u2014 Show all instances\n"
-            "/inst switch <id/title> [new_title] \u2014 Switch/create/rename\n"
-            "/inst rename <id> <title>\n"
-            "/inst end <id>\n"
+            "/list \u2014 Show all instances\n"
+            "/switch <id/title> [new_title] \u2014 Switch/create/rename\n"
+            "/rename <id> <title> \u2014 Rename instance\n"
+            "/end <id> \u2014 End instance\n"
             "_`@<id or name> <msg>` \u2014 One-shot message to any instance_\n\n"
             "**Agents**\n"
-            "/agent talk <name> \u2014 Switch to an agent\n"
-            "/agent back \u2014 Return to default\n"
-            "/agent pipeline <a> → <b> \"task\" \u2014 Sequential pipeline\n"
-            "/agent proactive start|stop|list\n"
-            "/agent proactive <name> set <schedule> <task>\n"
-            "/agent proactive <name> on|off|clear\n\n"
+            "/talk <name> \u2014 Switch to an agent\n"
+            "/back \u2014 Return to default\n"
+            "/pipe <a> \u2192 <b> \"task\" \u2014 Sequential pipeline\n"
+            "/proact start|stop|list\n"
+            "/proact <name> set <schedule> <task>\n"
+            "/proact <name> on|off|clear\n\n"
             "**Triggers**\n"
-            "/trigger run <id> \u2014 Fire a trigger manually\n\n"
+            "/run <id> \u2014 Fire a trigger manually\n\n"
             "**Orchestration**\n"
             "/orch <task> \u2014 Parallel agents, synthesized result\n\n"
-            "**Recording**\n"
-            "/record \u2014 Start screen recording\n"
-            "/stoprecord \u2014 Stop and send video\n\n"
             "**Collab**\n"
-            "/collab ask <peer> <task>\n"
-            "/collab broadcast <msg>\n"
+            "/ask <peer> <task>\n"
+            "/blast <msg>\n"
             "/borrow <peer> [bot] \u2014 Route messages to peer's bot\n"
             "/return \u2014 Disconnect from borrowed bot\n\n"
             "/help \u2014 Show this\n\n"
@@ -1552,37 +1527,6 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         )
         await send_message(chat_id, help_text, format_markdown=True)
 
-    elif cmd == "/record":
-        if screen_recorder.is_recording():
-            await send_message(chat_id, f"Already recording. {screen_recorder.status()}\nUse /stoprecord to stop.")
-        else:
-            path = screen_recorder.start()
-            if path:
-                await send_message(chat_id, f"\U0001f534 Screen recording started (max {screen_recorder.MAX_DURATION}s).\nUse /stoprecord to stop and receive the video.")
-            else:
-                await send_message(chat_id, "\u274c Failed to start screen recording. Is ffmpeg installed?")
-
-    elif cmd == "/stoprecord":
-        if not screen_recorder.is_recording():
-            await send_message(chat_id, "No recording in progress.")
-        else:
-            await send_message(chat_id, "\u23f9 Stopping recording...")
-            video_path = screen_recorder.stop()
-            if video_path:
-                size_mb = os.path.getsize(video_path) / (1024 * 1024)
-                if size_mb > 50:
-                    await send_message(chat_id, f"\u26a0\ufe0f Recording is {size_mb:.1f}MB (Telegram limit is 50MB). File saved at: {video_path}")
-                else:
-                    sent = await send_video(chat_id, video_path, caption="Screen recording")
-                    if sent:
-                        try:
-                            os.remove(video_path)
-                        except OSError:
-                            pass
-                    else:
-                        await send_message(chat_id, f"\u274c Failed to send video. File saved at: {video_path}")
-            else:
-                await send_message(chat_id, "\u274c Recording file was empty or missing.")
 
 
     elif cmd == "/model":
@@ -1604,6 +1548,40 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 await send_message(chat_id, f"\u2705 Model for <b>#{instances.display_num(inst.id, owner_id)}</b> set to <code>{new_model}</code>", parse_mode="HTML")
             else:
                 await send_message(chat_id, "\u274c Invalid model. Choose 'sonnet' or 'opus'.")
+
+    elif cmd == "/list":
+        await send_message(chat_id, instances.format_list(for_owner_id=owner_id), parse_mode="HTML")
+
+    elif cmd == "/switch":
+        arg = text.split(maxsplit=1)[1] if len(text.split()) > 1 else ""
+        if not arg:
+            new_inst = instances.create("Untitled", owner_id=owner_id)
+            _ensure_worker(new_inst)
+            await send_message(
+                chat_id,
+                f"\u2728 Created and switched to <b>#{instances.display_num(new_inst.id, owner_id)}: {new_inst.title}</b>",
+                parse_mode="HTML",
+            )
+        else:
+            switch_parts = arg.split(maxsplit=1)
+            target = switch_parts[0]
+            new_title = switch_parts[1] if len(switch_parts) > 1 else None
+            inst = instances.switch(target, owner_id=owner_id)
+            if inst:
+                if new_title:
+                    instances.rename(inst.id, new_title, owner_id=owner_id)
+                    await send_message(chat_id, f"\u25b6 Switched to and renamed <b>#{instances.display_num(inst.id, owner_id)}: {new_title}</b>", parse_mode="HTML")
+                else:
+                    await send_message(chat_id, f"\u25b6 Switched to <b>#{instances.display_num(inst.id, owner_id)}: {inst.title}</b>", parse_mode="HTML")
+                _ensure_worker(inst)
+            else:
+                new_inst = instances.create(arg, owner_id=owner_id)
+                _ensure_worker(new_inst)
+                await send_message(
+                    chat_id,
+                    f"\u2728 Created and switched to <b>#{instances.display_num(new_inst.id, owner_id)}: {new_inst.title}</b>",
+                    parse_mode="HTML",
+                )
 
     elif cmd == "/inst":
         parts = text.split(maxsplit=2)
@@ -1661,7 +1639,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 if target_inst and instances.rename(target_inst.id, new_title, owner_id=owner_id):
                     await send_message(chat_id, f"\u270f\ufe0f Renamed #{disp_num} to <b>{new_title}</b>", parse_mode="HTML")
                 else:
-                    await send_message(chat_id, f"No instance #{disp_num}. Try /inst list")
+                    await send_message(chat_id, f"No instance #{disp_num}. Try /list")
 
         elif sub == "end":
             if not arg or not arg.isdigit():
@@ -1687,7 +1665,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                     if inst_to_end and owner_inst_count <= 1:
                         await send_message(chat_id, "Can't end the last instance.")
                     else:
-                        await send_message(chat_id, f"No instance #{disp_num}. Try /inst list")
+                        await send_message(chat_id, f"No instance #{disp_num}. Try /list")
 
         else:
             inst = instances.get_active_for(owner_id)
@@ -1696,8 +1674,8 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 f"Active: <b>#{instances.display_num(inst.id, owner_id)}: {inst.title}</b>\n\n"
                 f"Commands:\n"
                 f"/inst new &lt;title&gt; \u2014 New instance\n"
-                f"/inst list \u2014 Show all instances\n"
-                f"/inst switch &lt;id/title&gt; [new_title] \u2014 Switch/Create/Rename\n"
+                f"/list \u2014 Show all instances\n"
+                f"/switch &lt;id/title&gt; [new_title] \u2014 Switch/Create/Rename\n"
                 f"/inst rename &lt;id&gt; &lt;title&gt; \u2014 Rename\n"
                 f"/inst end &lt;id&gt; \u2014 End instance",
                 parse_mode="HTML",
