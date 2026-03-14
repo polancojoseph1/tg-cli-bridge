@@ -1,5 +1,19 @@
 # bridgebot
 
+![GitHub stars](https://img.shields.io/github/stars/polancojoseph1/bridgebot?style=flat-square)
+![GitHub forks](https://img.shields.io/github/forks/polancojoseph1/bridgebot?style=flat-square)
+![GitHub issues](https://img.shields.io/github/issues/polancojoseph1/bridgebot?style=flat-square)
+![GitHub license](https://img.shields.io/github/license/polancojoseph1/bridgebot?style=flat-square)
+![GitHub last commit](https://img.shields.io/github/last-commit/polancojoseph1/bridgebot?style=flat-square)
+![GitHub commit activity](https://img.shields.io/github/commit-activity/m/polancojoseph1/bridgebot?style=flat-square)
+![GitHub release](https://img.shields.io/github/v/release/polancojoseph1/bridgebot?style=flat-square)
+
+![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)
+![Telegram](https://img.shields.io/badge/Telegram-2CA5E0?style=flat-square&logo=telegram&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)
+![ChromaDB](https://img.shields.io/badge/ChromaDB-FF6F00?style=flat-square&logo=databricks&logoColor=white)
+
 **Talk to any AI CLI through Telegram.** One codebase, plug-and-play CLI adapters.
 
 Pick your AI CLI (Claude Code, Gemini CLI, Codex CLI, or any custom tool), set your Telegram bot token, and start chatting from your phone.
@@ -7,7 +21,7 @@ Pick your AI CLI (Claude Code, Gemini CLI, Codex CLI, or any custom tool), set y
 ## Supported CLIs
 
 | CLI | `CLI_RUNNER` | What it wraps |
-|-----|-------------|---------------|
+| --- | --- | --- |
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `claude` | `claude -p --output-format stream-json` |
 | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | `gemini` | `gemini -p --yolo --output-format stream-json` |
 | [Qwen Coder](https://github.com/QwenLM/qwen-code) | `qwen` | `qwen --yolo --output-format stream-json` |
@@ -20,7 +34,7 @@ Pick your AI CLI (Claude Code, Gemini CLI, Codex CLI, or any custom tool), set y
 
 Pick one and install it:
 
-```bash
+```
 # Claude Code (Anthropic) — requires Anthropic account
 npm install -g @anthropic-ai/claude-code
 claude  # authenticate
@@ -39,8 +53,8 @@ npm install -g @openai/codex
 
 ### 2. Clone and set up
 
-```bash
-git clone https://github.com/your-username/bridgebot.git
+```
+git clone https://github.com/polancojoseph1/bridgebot.git
 cd bridgebot
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -48,15 +62,16 @@ pip install -r requirements.txt
 
 ### 3. Run the setup wizard
 
-```bash
+```
 python setup_wizard.py
 ```
 
 The wizard walks you through everything:
-- **Telegram bot token** — create a bot with [@BotFather](https://t.me/BotFather), then paste the token
-- **Your Telegram user ID** — get it from [@userinfobot](https://t.me/userinfobot)
-- **Which AI CLI to use** — auto-detects what's installed, lets you pick
-- **Webhook URL** — auto-detected from Tailscale if installed, or paste any URL
+
+* **Telegram bot token** — create a bot with [@BotFather](https://t.me/BotFather), then paste the token
+* **Your Telegram user ID** — get it from [@userinfobot](https://t.me/userinfobot)
+* **Which AI CLI to use** — auto-detects what's installed, lets you pick
+* **Webhook URL** — auto-detected from Tailscale if installed, or paste any URL
 
 Re-run `python setup_wizard.py` anytime to change settings.
 
@@ -66,7 +81,7 @@ The bot needs a public HTTPS URL for Telegram webhooks. Tailscale Funnel gives y
 
 **One-time setup:**
 
-```bash
+```
 # 1. Install Tailscale
 brew install tailscale
 
@@ -90,7 +105,7 @@ Your URL never changes, survives reboots, and Tailscale manages the tunnel autom
 
 **Alternative:** paste any HTTPS URL when the wizard asks (ngrok, cloudflared, etc.).
 
-```bash
+```
 curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<YOUR_URL>/webhook"
 ```
 
@@ -98,7 +113,7 @@ curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<YOUR_URL>/webhook"
 
 Press `r` in the setup wizard, or run directly:
 
-```bash
+```
 python -m uvicorn server:app --host 0.0.0.0 --port 8588
 ```
 
@@ -106,34 +121,34 @@ Message your bot on Telegram — it should respond.
 
 ## Features
 
-- **Multi-instance sessions** — Run multiple conversations simultaneously (`/claude list`, `/claude new`)
-- **Voice messages** — Send voice notes, get transcribed and answered (requires `faster-whisper` + `ffmpeg`)
-- **Voice replies** — Bot responds with audio using Edge TTS
-- **Image support** — Send photos for vision analysis
-- **Image generation** — Generate images with `/imagine` (requires Gemini API key)
-- **Vector memory** — ChromaDB-powered conversation memory with `/remember` (requires `chromadb`)
-- **Task tracking** — Shared todo list with `/task add` and `/task done`
-- **Agent system** — Named specialist agents with custom system prompts and skill packs
-- **Specialist agents** — Create domain-specific agents and talk to them directly
-- **Task orchestration** — Break complex tasks into parallel sub-agents with `/orch`
-- **Proactive agents** — Schedule agents to run recurring tasks on a cron-like schedule
-- **Company research** — SEC filings, government contracts, and news synthesis with `/research`
-- **Screen recording** — Capture and send screen recordings with `/record` (macOS)
-- **Group voice chat** — Join Telegram group voice chat with `/call` (requires Pyrogram setup)
-- **Smart routing** — Ollama-based message routing across instances (requires local Ollama)
-- **Live tool updates** — See what tools the AI is using in real-time
+* **Multi-instance sessions** — Run multiple conversations simultaneously (`/claude list`, `/claude new`)
+* **Voice messages** — Send voice notes, get transcribed and answered (requires `faster-whisper` + `ffmpeg`)
+* **Voice replies** — Bot responds with audio using Edge TTS
+* **Image support** — Send photos for vision analysis
+* **Image generation** — Generate images with `/imagine` (requires Gemini API key)
+* **Vector memory** — ChromaDB-powered conversation memory with `/remember` (requires `chromadb`)
+* **Task tracking** — Shared todo list with `/task add` and `/task done`
+* **Agent system** — Named specialist agents with custom system prompts and skill packs
+* **Specialist agents** — Create domain-specific agents and talk to them directly
+* **Task orchestration** — Break complex tasks into parallel sub-agents with `/orch`
+* **Proactive agents** — Schedule agents to run recurring tasks on a cron-like schedule
+* **Company research** — SEC filings, government contracts, and news synthesis with `/research`
+* **Screen recording** — Capture and send screen recordings with `/record` (macOS)
+* **Group voice chat** — Join Telegram group voice chat with `/call` (requires Pyrogram setup)
+* **Smart routing** — Ollama-based message routing across instances (requires local Ollama)
+* **Live tool updates** — See what tools the AI is using in real-time
 
 ## Commands
 
 | Command | Description |
-|---------|-------------|
+| --- | --- |
 | `/start` | Show welcome message |
 | `/help` | Detailed help |
 | `/stop` | Stop current response |
 | `/new` | Start fresh conversation |
 | `/kill` | Force-kill all CLI processes |
 | `/voice` | Toggle voice replies |
-| `/model <name>` | Switch model (Claude only) |
+| `/model <n>` | Switch model (Claude only) |
 | `/remember <text>` | Save to memory |
 | `/memory <query>` | Search memory |
 | `/task add <text>` | Add a task |
@@ -144,11 +159,11 @@ Message your bot on Telegram — it should respond.
 | `/status` | Show bot status |
 | `/server` | Restart the server |
 | **Agents** | |
-| `/agent create <type> <name>` | Create a specialist agent |
+| `/agent create <type> <n>` | Create a specialist agent |
 | `/agent list` | Show all agents |
-| `/agent talk <name>` | Switch to an agent instance |
-| `/agent task <name> <task>` | Assign a one-off task to an agent |
-| `/agent proactive <name> set <HH:MM> <task>` | Schedule a recurring agent task |
+| `/agent talk <n>` | Switch to an agent instance |
+| `/agent task <n> <task>` | Assign a one-off task to an agent |
+| `/agent proactive <n> set <HH:MM> <task>` | Schedule a recurring agent task |
 | `/agent proactive start` | Start the proactive worker |
 | `/agent proactive stop` | Stop the proactive worker |
 | `/agent proactive status` | Show scheduled tasks |
@@ -175,24 +190,26 @@ Message your bot on Telegram — it should respond.
 All settings are in `.env`. See [`.env.example`](.env.example) for the full list.
 
 ### Required
-- `TELEGRAM_BOT_TOKEN` — From BotFather
-- `ALLOWED_USER_ID` — Your Telegram user ID (restricts access)
-- `CLI_RUNNER` — Which CLI to use (`claude`, `gemini`, `codex`, `generic`)
+
+* `TELEGRAM_BOT_TOKEN` — From BotFather
+* `ALLOWED_USER_ID` — Your Telegram user ID (restricts access)
+* `CLI_RUNNER` — Which CLI to use (`claude`, `gemini`, `codex`, `generic`)
 
 ### Optional Features
-- `MEMORY_ENABLED=true` — ChromaDB vector memory
-- `GEMINI_API_KEY` — For image generation
-- `CHROME_ENABLED=true` — Chrome browser extension (Claude only)
-- `EDGAR_CONTACT` — Email for SEC EDGAR User-Agent (e.g. `research@example.com`)
-- `TIMEZONE` — Timezone for scheduler in IANA format, defaults to UTC (e.g. `America/New_York`, `Europe/London`)
-- `TASK_TIMEOUT` — Max seconds per scheduled task (default: `300`)
+
+* `MEMORY_ENABLED=true` — ChromaDB vector memory
+* `GEMINI_API_KEY` — For image generation
+* `CHROME_ENABLED=true` — Chrome browser extension (Claude only)
+* `EDGAR_CONTACT` — Email for SEC EDGAR User-Agent (e.g. `research@example.com`)
+* `TIMEZONE` — Timezone for scheduler in IANA format, defaults to UTC (e.g. `America/New_York`, `Europe/London`)
+* `TASK_TIMEOUT` — Max seconds per scheduled task (default: `300`)
 
 ## Optional Features Guide
 
 Some features require additional modules and/or Python packages. All optional modules use graceful `try/except ImportError` — the server starts without them.
 
 | Feature | Module | pip packages | System deps |
-|---------|--------|-------------|-------------|
+| --- | --- | --- | --- |
 | Vector memory | `memory_handler.py` | `chromadb` | — |
 | Voice transcription | `voice_handler.py` | `faster-whisper`, `edge-tts` | `ffmpeg` |
 | Screen recording | `screen_recorder.py` | `Pillow` | macOS only |
@@ -243,10 +260,11 @@ Optional modules (auto-detected at startup):
 ```
 
 Each runner adapter handles:
-- CLI subprocess management (spawn, stream, kill)
-- Session tracking (resume conversations)
-- System prompt injection (CLI-specific methods)
-- Output parsing (stream-json, JSONL, plain text)
+
+* CLI subprocess management (spawn, stream, kill)
+* Session tracking (resume conversations)
+* System prompt injection (CLI-specific methods)
+* Output parsing (stream-json, JSONL, plain text)
 
 ## Adding a Custom CLI
 
@@ -264,4 +282,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, how to add runners and opt
 ## License
 
 MIT
-
