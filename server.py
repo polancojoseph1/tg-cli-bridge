@@ -27,7 +27,7 @@ from config import (
     COLLAB_ENABLED, INTERNAL_API_KEY,
 )
 from runners import create_runner
-from telegram_handler import send_message, delete_message, send_voice, send_photo, send_video, send_chat_action, download_photo, download_document, register_webhook, delete_webhook, get_updates, close_client, register_bot_commands, send_inline_keyboard, answer_callback_query
+from transport import send_message, delete_message, send_voice, send_photo, send_video, send_chat_action, download_photo, download_document, register_webhook, delete_webhook, get_updates, close_client, register_bot_commands, send_inline_keyboard, answer_callback_query
 import user_access
 import security_filter
 from image_handler import generate_image
@@ -258,6 +258,42 @@ async def _notify_startup_background(crashed: bool = False) -> None:
     await asyncio.sleep(0.2)
     if not crashed:
         await send_message(ALLOWED_USER_ID, "\u2705 Server restarted and ready.")
+
+
+async def _wa_qr_watcher() -> None:
+    """Watch for a fresh QR PNG from the Baileys bridge and send it via Telegram."""
+    import telegram_handler as _tg  # always use Telegram for QR delivery regardless of transport
+    wa_auth_dir = os.environ.get("WA_AUTH_DIR", os.path.expanduser("~/.jefe/wa-auth"))
+    qr_png = os.path.join(wa_auth_dir, "qr.png")
+    qr_ready = os.path.join(wa_auth_dir, "qr.ready")
+
+    await asyncio.sleep(2)  # give bridge time to connect first
+    await _tg.send_message(ALLOWED_USER_ID, "📱 WhatsApp bridge starting — scan the QR code when it arrives to connect your number.")
+
+    last_seen = 0.0
+    for _ in range(60):  # poll for up to 5 minutes
+        await asyncio.sleep(5)
+        if os.path.exists(qr_ready) and os.path.exists(qr_png):
+            mtime = os.path.getmtime(qr_png)
+            if mtime > last_seen:
+                last_seen = mtime
+                try:
+                    os.remove(qr_ready)
+                    await _tg.send_message(ALLOWED_USER_ID, "📷 Scan this QR in WhatsApp → Linked Devices → Link a Device (expires in ~20s, will refresh automatically):")
+                    await _tg.send_photo(ALLOWED_USER_ID, qr_png)
+                    logger.info("[wa] QR code sent to owner via Telegram")
+                except Exception as e:
+                    logger.warning("[wa] Failed to send QR via Telegram: %s", e)
+        # Stop watching once bridge reports connected
+        try:
+            import httpx as _hx
+            async with _hx.AsyncClient(timeout=2.0) as _c:
+                r = await _c.get(os.environ.get("WA_BRIDGE_URL", "http://127.0.0.1:3001") + "/status")
+                if r.json().get("connected"):
+                    await _tg.send_message(ALLOWED_USER_ID, "✅ WhatsApp connected! You can now message this bot on WhatsApp.")
+                    return
+        except Exception:
+            pass
 
 
 async def _restore_sessions_after_crash() -> None:
@@ -576,6 +612,10 @@ async def lifespan(application: FastAPI):
     asyncio.create_task(_notify_startup_background(crashed=_crashed))
     if _crashed:
         asyncio.create_task(_restore_sessions_after_crash())
+
+    # WhatsApp transport: watch for QR code from bridge and send via Telegram
+    if os.environ.get("TRANSPORT", "").lower() == "whatsapp":
+        asyncio.create_task(_wa_qr_watcher())
     # Start borrow session timeout checker
     if COLLAB_ENABLED and collab_borrow is not None:
         asyncio.create_task(collab_borrow.timeout_checker(
@@ -998,6 +1038,75 @@ async def webhook(request: Request):
     return JSONResponse({"ok": True})
 
 
+@app.post("/webhook/whatsapp")
+async def wa_webhook(request: Request):
+    """Receive incoming WhatsApp messages from the Baileys Node.js bridge."""
+    import os as _os
+    from whatsapp_handler import register_jid, jid_to_int
+
+    expected_secret = _os.environ.get("WA_BRIDGE_SECRET", "")
+    if expected_secret:
+        incoming = request.headers.get("X-WA-Bridge-Secret", "")
+        if incoming != expected_secret:
+            logger.warning("[wa] Webhook rejected — invalid bridge secret")
+            return JSONResponse(status_code=401, content={"ok": False})
+
+    body = await request.json()
+    jid: str = body.get("jid", "")
+    text: str = body.get("message", "")
+    sender_name: str = body.get("sender_name", "")
+    media_path: str | None = body.get("media_path")
+    media_type: str | None = body.get("media_type")
+
+    if not jid:
+        return JSONResponse({"ok": False, "error": "jid required"}, status_code=400)
+
+    # Map JID to consistent int IDs
+    wa_owner_jid = _os.environ.get("WA_OWNER_JID", "")
+    if wa_owner_jid and jid == wa_owner_jid:
+        user_id = ALLOWED_USER_ID
+    else:
+        user_id = jid_to_int(jid)
+
+    chat_id = user_id
+    register_jid(chat_id, jid)
+
+    logger.info("[wa] Incoming | jid=%s user=%d text=%s", jid, user_id, (text or "")[:80])
+
+    health.record_message()
+
+    if media_type == "image" and media_path:
+        target_instance = _resolve_target_instance(text or "image", user_id)
+        asyncio.create_task(_enqueue_message(QueuedMessage(
+            chat_id=chat_id,
+            msg_type=MessageType.PHOTO,
+            text=text,
+            file_id=media_path,  # WA: already a local path, skip Telegram download
+            instance_id=target_instance,
+            user_id=user_id,
+        )))
+    elif media_type == "audio" and media_path:
+        target_instance = _resolve_target_instance("voice", user_id)
+        asyncio.create_task(_enqueue_message(QueuedMessage(
+            chat_id=chat_id,
+            msg_type=MessageType.VOICE,
+            file_id=media_path,
+            instance_id=target_instance,
+            user_id=user_id,
+        )))
+    elif text:
+        target_instance = _resolve_target_instance(text, user_id)
+        asyncio.create_task(_enqueue_message(QueuedMessage(
+            chat_id=chat_id,
+            msg_type=MessageType.TEXT,
+            text=text,
+            instance_id=target_instance,
+            user_id=user_id,
+        )))
+
+    return JSONResponse({"ok": True})
+
+
 @app.post("/triggers/webhook/{trigger_id}")
 async def trigger_webhook(trigger_id: str, request: Request):
     """HTTP endpoint for external event triggers (GitHub, custom webhooks, etc.)."""
@@ -1352,7 +1461,11 @@ async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", 
 
     image_path = None
     try:
-        image_path = await download_photo(file_id)
+        # For WhatsApp transport, file_id is already a local path downloaded by the bridge
+        if os.path.exists(file_id):
+            image_path = file_id
+        else:
+            image_path = await download_photo(file_id)
     except Exception as e:
         logger.error("Photo download failed: %s", e)
         await send_message(chat_id, _label(inst, f"\u274c Failed to download photo: {e}", proc_owner_id), format_markdown=True)
@@ -1404,7 +1517,11 @@ async def _process_voice_message(chat_id: int, file_id: str, caption: str = "", 
 
     voice_path = None
     try:
-        voice_path = await download_voice(file_id)
+        # For WhatsApp transport, file_id is already a local path downloaded by the bridge
+        if os.path.exists(file_id):
+            voice_path = file_id
+        else:
+            voice_path = await download_voice(file_id)
         transcribed = await transcribe_audio(voice_path)
     except Exception as e:
         logger.error("Voice transcription failed: %s", e)
