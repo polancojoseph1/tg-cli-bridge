@@ -1028,6 +1028,19 @@ _MEDIA_PATH_RE = re.compile(
 )
 
 
+_MEDIA_ALLOWED_DIRS = [
+    os.path.realpath(os.path.expanduser("~/Desktop/Jefe/")),
+    os.path.realpath(os.path.expanduser("/tmp")),
+    os.path.realpath(os.path.expanduser("~/.bridgebot/")),
+]
+
+
+def _is_allowed_media_path(path: str) -> bool:
+    """Return True only if path is inside an allowed directory."""
+    real = os.path.realpath(path)
+    return any(real.startswith(d + os.sep) or real == d for d in _MEDIA_ALLOWED_DIRS)
+
+
 async def _extract_and_send_media(chat_id: int, text: str) -> list[str]:
     """Find image/video file paths in response text and send them via Telegram."""
     sent = []
@@ -1037,6 +1050,9 @@ async def _extract_and_send_media(chat_id: int, text: str) -> list[str]:
         if path in seen:
             continue
         seen.add(path)
+        if not _is_allowed_media_path(path):
+            logger.warning("Blocked media path outside allowed dirs: %s", path)
+            continue
         if not os.path.isfile(path) or os.path.getsize(path) < 1024:
             continue
         ext = os.path.splitext(path)[1].lower()
@@ -1070,13 +1086,17 @@ async def _process_message(chat_id: int, text: str, voice_reply: bool = False, i
                     await send_message(chat_id, f"Borrow session error: peer '{borrow_info.peer_name}' not found. Use /return to disconnect.")
                     return
             except Exception as e:
-                logger.error(f"Borrow proxy error: {e}")
-                await send_message(chat_id, f"Borrow session error: {e}. Use /return to disconnect.")
+                logger.error("Borrow proxy error: %s", e)
+                await send_message(chat_id, "Borrow session error. Use /return to disconnect.")
                 return
 
     inst = instance or instances.active
     proc_owner_id = 0 if user_id == ALLOWED_USER_ID else user_id
-    thinking_msg_id = await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id, show_emoji=False), format_markdown=True)
+
+    # Ephemeral agents run silently — no "Thinking..." message, no progress indicators
+    _ephemeral_agent = agent_manager.get_agent(inst.agent_id) if inst.agent_id else None
+    _is_ephemeral = bool(_ephemeral_agent and _ephemeral_agent.ephemeral)
+    thinking_msg_id = None if _is_ephemeral else await send_message(chat_id, _label(inst, "\U0001f9e0 Thinking...", proc_owner_id, show_emoji=False), format_markdown=True)
 
     start = time.time()
 
@@ -1092,6 +1112,8 @@ async def _process_message(chat_id: int, text: str, voice_reply: bool = False, i
     _prefs = display_prefs.get_display_prefs(user_id)
 
     async def on_progress(progress_text: str):
+        if _is_ephemeral:
+            return  # ephemeral agents run silently — suppress all progress
         if progress_text.startswith("<blockquote"):
             if not _prefs["show_thoughts"]:
                 return  # user doesn't want to see thoughts
