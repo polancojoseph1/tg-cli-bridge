@@ -251,9 +251,7 @@ async def _start_scheduler_background() -> None:
 async def _notify_startup_background(crashed: bool = False) -> None:
     """Send startup ping without blocking server readiness."""
     await asyncio.sleep(0.2)
-    if crashed:
-        await send_message(ALLOWED_USER_ID, "\u26a0\ufe0f Server restarted after crash \u2014 checking for sessions to recover...")
-    else:
+    if not crashed:
         await send_message(ALLOWED_USER_ID, "\u2705 Server restarted and ready.")
 
 
@@ -365,16 +363,7 @@ async def _restore_sessions_after_crash() -> None:
                 )
                 await inst.queue.put(item)
 
-    if unresolved_count:
-        await send_message(
-            ALLOWED_USER_ID,
-            f"\u267b\ufe0f Crash detected. Restoring {unresolved_count} active session(s)...",
-        )
-    else:
-        await send_message(
-            ALLOWED_USER_ID,
-            "\u2139\ufe0f Crash detected but no active sessions to recover. Starting fresh.",
-        )
+    pass  # crash recovery runs silently
 
 
 def _extract_text_from_event(data: dict, text_parts: list) -> None:
