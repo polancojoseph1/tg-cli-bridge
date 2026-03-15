@@ -12,6 +12,9 @@ logger = logging.getLogger("bridge.image")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 IMAGE_MODEL = "gemini-2.5-flash-image"
 
+if not GEMINI_API_KEY:
+    logger.warning("GEMINI_API_KEY is not set — image generation will be unavailable")
+
 
 async def generate_image(prompt: str) -> tuple[str, str]:
     """Generate an image using Gemini's image generation.

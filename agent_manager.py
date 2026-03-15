@@ -511,7 +511,9 @@ async def _diagnose_mistake(agent_name: str, task_response_text: str, feedback: 
             logger.info("[_diagnose_mistake] root cause: %s", result[:120])
             return result
     except Exception as e:
-        logger.warning("_diagnose_mistake failed: %s", e)
+        # Redact any credential-like strings (API keys, tokens) from exception messages
+        _safe_err = re.sub(r'[A-Za-z0-9_\-]{32,}', '[REDACTED]', str(e))
+        logger.warning("_diagnose_mistake failed: %s", _safe_err)
         return ""
 
 

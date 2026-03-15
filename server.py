@@ -853,15 +853,26 @@ async def process_update(body: dict) -> None:
     # Document upload -- save to uploads folder inside memory dir
     if document:
         file_id = document["file_id"]
-        file_name = os.path.basename(document.get("file_name", f"file_{file_id[:8]}"))
+        _raw_name = document.get("file_name", "")
+        # Extract only the extension from the user-supplied name (never trust the stem).
+        # Generate a safe server-side filename; use original name for display only.
+        _ext = ""
+        if _raw_name:
+            _raw_ext = os.path.splitext(_raw_name)[1]
+            # Whitelist extension characters: alphanumeric only, max 10 chars
+            _ext = re.sub(r"[^a-zA-Z0-9]", "", _raw_ext)[:10]
+        file_name = f"upload_{file_id[:8]}_{int(time.time())}" + (f".{_ext}" if _ext else "")
+        # Sanitize display name: only safe characters, max 128 chars
+        display_name = re.sub(r"[^a-zA-Z0-9._\- ]", "_", _raw_name)[:128] if _raw_name else file_name
         save_dir = os.path.join(MEMORY_DIR, "uploads")
         os.makedirs(save_dir, exist_ok=True)
         dest_path = os.path.join(save_dir, file_name)
-        if not os.path.realpath(dest_path).startswith(os.path.realpath(save_dir)):
+        # realpath boundary check is the sole path-traversal guard
+        if os.path.commonpath([os.path.realpath(dest_path), os.path.realpath(save_dir)]) != os.path.realpath(save_dir):
             logger.warning("Upload path escape blocked: %s", dest_path)
             return
         health.record_message()
-        asyncio.create_task(_handle_document_upload(chat_id, file_id, dest_path, file_name))
+        asyncio.create_task(_handle_document_upload(chat_id, file_id, dest_path, display_name))
         return
 
     # Voice / audio message -- transcribe then process
@@ -1004,11 +1015,14 @@ async def trigger_webhook(trigger_id: str, request: Request):
 
     raw_body = await request.body()
 
-    # HMAC secret is mandatory — triggers without a secret are rejected
+    # HMAC secret is mandatory and must meet minimum strength (32+ bytes)
     secret = trigger.config.get("secret", "")
     if not secret:
         logger.warning("Trigger '%s': rejected — no secret configured", trigger_id)
         return JSONResponse({"ok": False, "error": "trigger has no secret configured"}, status_code=401)
+    if len(secret.encode()) < 32:
+        logger.warning("Trigger '%s': rejected — secret too short (min 32 bytes)", trigger_id)
+        return JSONResponse({"ok": False, "error": "trigger secret too short — minimum 32 bytes required"}, status_code=401)
     sig_header = request.headers.get("X-Hub-Signature-256", "")
     expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig_header, expected):

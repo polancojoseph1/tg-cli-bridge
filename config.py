@@ -15,7 +15,13 @@ logger = logging.getLogger("bridge")
 
 # === Required ===
 TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-ALLOWED_USER_ID: int = int(os.environ.get("ALLOWED_USER_ID", "0"))
+try:
+    ALLOWED_USER_ID: int = int(os.environ.get("ALLOWED_USER_ID", "0"))
+except ValueError as _e:
+    raise ValueError(
+        f"ALLOWED_USER_ID must be a plain integer (Telegram user ID). Got: "
+        f"'{os.environ.get('ALLOWED_USER_ID')}'. Check your .env file."
+    ) from _e
 
 # Comma-separated list of allowed Telegram user IDs (e.g. "123456,789012")
 # Falls back to just ALLOWED_USER_ID if not set
