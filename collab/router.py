@@ -10,6 +10,7 @@ Endpoints:
 """
 
 import asyncio
+import hmac
 import logging
 import time
 from typing import Annotated
@@ -66,7 +67,7 @@ def _require_owner_token(request: Request) -> None:
             detail="COLLAB_TOKEN not configured on this instance",
         )
     token = request.headers.get("X-Collab-Token", "").strip()
-    if token != COLLAB_TOKEN:
+    if not hmac.compare_digest(token, COLLAB_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid owner token")
 
 
@@ -258,7 +259,8 @@ async def memory_search(
         except Exception as e:
             logger.error("memory_search (shared) failed: %s", e)
 
-    logger.info("Memory search by '%s': q=%s scope=%s results=%d", peer_name, q[:60], scope, len(results))
+    safe_q = q[:60].replace("\n", "\\n").replace("\r", "\\r")
+    logger.info("Memory search by '%s': q=%s scope=%s results=%d", peer_name, safe_q, scope, len(results))
 
     return {"results": results, "scope": scope or "none"}
 

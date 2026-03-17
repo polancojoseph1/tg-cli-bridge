@@ -39,6 +39,8 @@ const BRIDGE_PORT        = parseInt(process.env.WA_BRIDGE_PORT || '3001')
 const BRIDGEBOT_URL      = process.env.BRIDGEBOT_WEBHOOK_URL || 'http://127.0.0.1:8591/webhook/whatsapp'
 const AUTH_DIR           = process.env.WA_AUTH_DIR || join(homedir(), '.jefe', 'wa-auth')
 const BRIDGE_SECRET      = process.env.WA_BRIDGE_SECRET || ''
+// Digits only, e.g. "16466750765" — if set, uses phone pairing instead of QR
+const PHONE_NUMBER       = (process.env.WA_PHONE_NUMBER || '').replace(/\D/g, '')
 
 mkdirSync(AUTH_DIR, { recursive: true })
 
@@ -71,8 +73,29 @@ async function connectToWA() {
 
   sock.ev.on('creds.update', saveCreds)
 
+  // Phone number pairing: request code as soon as socket is ready (not registered yet)
+  if (PHONE_NUMBER && !state.creds.registered) {
+    // Give the socket a moment to initialize before requesting
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(PHONE_NUMBER)
+        const formatted = code.match(/.{1,4}/g)?.join('-') || code
+        console.log(`\n[bridge] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
+        console.log(`[bridge] Phone pairing code: ${formatted}`)
+        console.log(`[bridge] Enter this in WhatsApp → Linked Devices → Link with phone number`)
+        console.log(`[bridge] ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
+        // Save code to file so the setup wizard can display it live
+        writeFileSync(join(AUTH_DIR, 'pairing_code.txt'), formatted)
+        writeFileSync(join(AUTH_DIR, 'pairing_code.ready'), '1')
+      } catch (e) {
+        console.error('[bridge] Failed to get pairing code:', e.message)
+      }
+    }, 3000)
+  }
+
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
+    if (qr && !PHONE_NUMBER) {
+      reconnectAttempts = 0  // reset — QR refresh is expected, not a failure
       console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
       console.log('  Scan this QR code with WhatsApp:')
       console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')

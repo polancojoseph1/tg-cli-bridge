@@ -1,7 +1,7 @@
 """Unified configuration for bridgebot.
 
 All settings are loaded from environment variables (via .env file).
-Users select their CLI runner with CLI_RUNNER=claude|gemini|codex|qwen|opencode|generic|free.
+Users select their CLI runner with CLI_RUNNER=claude|gemini|codex|qwen|freecode|generic|free.
 """
 
 import os
@@ -64,7 +64,7 @@ _RUNNER_DEFAULT_MODELS: dict[str, str] = {
     "gemini":   "gemini-2.5-pro",
     "codex":    "gpt-4o",
     "qwen":     "qwen2.5-coder:7b",
-    "opencode": "opencode/mimo-v2-flash-free",
+    "freecode": "freecode/mimo-v2-flash-free",
 }
 DEFAULT_AGENT_MODEL: str = os.environ.get(
     "DEFAULT_AGENT_MODEL",
@@ -145,8 +145,9 @@ _CLI_DEFAULTS: dict[str, dict] = {
     "gemini":   {"command": "gemini",   "bot_name": "Gemini",   "bot_emoji": "✨"},
     "codex":    {"command": "codex",    "bot_name": "Codex",    "bot_emoji": "⚡"},
     "qwen":     {"command": "qwen",     "bot_name": "Qwen",     "bot_emoji": "🔮"},
-    "opencode": {"command": "opencode", "bot_name": "OpenCode", "bot_emoji": "🔓"},
-    "free":     {"command": "",         "bot_name": "Free",     "bot_emoji": "🆓"},
+    "freecode": {"command": "freecode", "bot_name": "FreeCode", "bot_emoji": "🆓"},
+    "free":     {"command": "",         "bot_name": "Free Bot", "bot_emoji": "🆓"},
+    "router":   {"command": "",         "bot_name": "Claude",   "bot_emoji": "🤖"},
 }
 
 def _auto_detect():
@@ -180,9 +181,9 @@ def validate_config() -> list[str]:
         errors.append("TELEGRAM_BOT_TOKEN is not set")
     if not ALLOWED_USER_IDS:
         errors.append("ALLOWED_USER_ID is not set")
-    if CLI_RUNNER not in ("claude", "gemini", "codex", "qwen", "opencode", "generic", "free"):
-        errors.append(f"CLI_RUNNER='{CLI_RUNNER}' — must be claude, gemini, codex, qwen, opencode, generic, or free")
-    if CLI_RUNNER not in ("generic", "free") and not is_cli_available():
+    if CLI_RUNNER not in ("claude", "gemini", "codex", "qwen", "opencode", "freecode", "generic", "free", "router"):
+        errors.append(f"CLI_RUNNER='{CLI_RUNNER}' — must be claude, gemini, codex, qwen, freecode, generic, free, or router")
+    if CLI_RUNNER not in ("generic", "free", "router") and not is_cli_available():
         errors.append(
             f"CLI binary '{CLI_COMMAND}' not found in PATH — "
             f"install it before starting the bot"

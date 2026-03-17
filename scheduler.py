@@ -391,7 +391,7 @@ async def scheduler_loop() -> None:
                 chat_id_str = str(row["chat_id"]) or _default_chat_id
                 cli_cmd = (
                     getattr(_runner_ref, "cli_command", None)
-                    or __import__("os").environ.get("CLI_COMMAND", "claude")
+                    or os.environ.get("CLI_COMMAND", "claude")
                 )
                 asyncio.create_task(
                     asyncio.to_thread(

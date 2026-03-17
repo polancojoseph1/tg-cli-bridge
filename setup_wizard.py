@@ -109,13 +109,13 @@ CLI_OPTIONS = {
         "install": "npm install -g @qwen-code/qwen-code",
         "url": "https://github.com/QwenLM/qwen-code",
     },
-    "opencode": {
-        "command": "opencode",
-        "label": "OpenCode",
-        "company": "OpenCode AI",
+    "freecode": {
+        "command": "freecode",
+        "label": "FreeCode",
+        "company": "FreeCode",
         "description": "AI coding agent with free models — local tool access",
-        "install": "npm install -g opencode-ai",
-        "url": "https://github.com/nicholasgriffintn/opencode",
+        "install": "Install from https://github.com/polancojoseph1/freecode",
+        "url": "https://github.com/polancojoseph1/freecode",
     },
 }
 
@@ -735,15 +735,15 @@ def step_free_api_keys(existing: dict):
     """Walk the user through getting free API keys from each provider."""
     print()
     print("=" * 60)
-    print("  Free Bot (OpenCode) — API Key Setup")
+    print("  Free Bot (FreeCode) — API Key Setup")
     print("=" * 60)
     print()
-    print("  How Free Bot (OpenCode) works:")
+    print("  How Free Bot (FreeCode) works:")
     print("  Your bot rotates across up to 11 FREE AI providers.")
     print("  When one hits its limit, it instantly switches to the next.")
     print("  The more providers you add, the harder it is to ever hit a wall.")
     print()
-    print("  Powered by OpenCode (code tasks) + OpenRouter (model routing).")
+    print("  Powered by FreeCode (code tasks) + OpenRouter (model routing).")
     print()
     print("  GOAL: Add as many as possible. Each one takes ~2 minutes.")
     print("  You only need ONE to get started — but more = better.")
@@ -895,10 +895,10 @@ def step_cli_runner(existing: dict):
             and not _is_placeholder(existing.get(p["env_key"], "")))
     )
     free_status = f"{free_key_count}/11 providers configured" if free_key_count else "no providers yet"
-    print(f"  {free_num}. Free Bot (OpenCode)  (Recommended for new users)")
+    print(f"  {free_num}. Free Bot (FreeCode)  (Recommended for new users)")
     print("     Rotates across 11 free AI providers automatically.")
     print("     No paid subscription needed — works with free API keys.")
-    print("     Powered by OpenCode + OpenRouter.")
+    print("     Powered by FreeCode + OpenRouter.")
     print(f"     Status: {free_status}{current_marker}")
     print()
     options.append("free")

@@ -1,16 +1,16 @@
 """Rotating OpenAI-compatible proxy for Free Bot.
 
-Handles both endpoints OpenCode uses:
+Handles both endpoints FreeCode uses:
 - POST /v1/chat/completions  — standard Chat Completions API
-- POST /v1/responses         — OpenAI Responses API (used by OpenCode 1.2+)
+- POST /v1/responses         — OpenAI Responses API (used by FreeCode 1.2+)
 
 Transparently rotates through all configured free providers on 429 or errors.
 Logs every provider switch for debugging.
 
-OpenCode points here via:
+FreeCode points here via:
     OPENAI_API_KEY=free-proxy
     OPENAI_BASE_URL=http://127.0.0.1:8592/v1
-    OPENCODE_MODEL=openai/free-bot  (model name is ignored — proxy uses actual provider models)
+    FREECODE_MODEL=freecode/free-bot  (model name is ignored — proxy uses actual provider models)
 """
 
 import json
@@ -160,11 +160,13 @@ async def _call_providers(
 # --- /v1/chat/completions ---
 
 async def chat_completions(request: Request) -> Response:
-    """POST /v1/chat/completions — standard Chat Completions."""
+    """POST /v1/chat/completions — standard Chat Completions (streaming + non-streaming)."""
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"error": {"message": "invalid JSON body"}}, status_code=400)
+
+    stream = body.get("stream", False)
 
     data = await _call_providers(
         messages=body.get("messages", []),
@@ -173,11 +175,69 @@ async def chat_completions(request: Request) -> Response:
         tool_choice=body.get("tool_choice"),
     )
     if data is None:
+        err = {"error": {"message": "All free providers failed or are temporarily busy."}}
+        if stream:
+            async def _err_chat_stream():
+                yield f"data: {json.dumps(err)}\n\n"
+                yield "data: [DONE]\n\n"
+            return StreamingResponse(_err_chat_stream(), media_type="text/event-stream")
         return _all_busy_error()
-    return JSONResponse(data)
+
+    if not stream:
+        return JSONResponse(data)
+
+    # Fake-stream: wrap the completed response as SSE chunks
+    return StreamingResponse(
+        _stream_chat_completion(data),
+        media_type="text/event-stream",
+    )
 
 
-# --- /v1/responses (OpenAI Responses API — used by OpenCode 1.2+) ---
+async def _stream_chat_completion(data: dict):
+    """Convert a completed Chat Completion response into SSE streaming chunks."""
+    completion_id = data.get("id", f"chatcmpl-{uuid.uuid4().hex[:20]}")
+    model = data.get("model", "free-proxy")
+    created = data.get("created", int(time.time()))
+    choices = data.get("choices", [{}])
+    usage = data.get("usage", {})
+
+    assistant_msg = choices[0].get("message", {}) if choices else {}
+    content = assistant_msg.get("content") or ""
+    tool_calls = assistant_msg.get("tool_calls") or []
+    finish_reason = choices[0].get("finish_reason", "stop") if choices else "stop"
+
+    base = {"id": completion_id, "object": "chat.completion.chunk",
+            "created": created, "model": model}
+
+    if tool_calls:
+        # Emit tool call chunks
+        for i, tc in enumerate(tool_calls):
+            fn = tc.get("function", {})
+            chunk = {**base, "choices": [{
+                "index": 0,
+                "delta": {"tool_calls": [{
+                    "index": i,
+                    "id": tc.get("id", f"call_{uuid.uuid4().hex[:20]}"),
+                    "type": "function",
+                    "function": {"name": fn.get("name", ""), "arguments": fn.get("arguments", "{}")},
+                }]},
+                "finish_reason": None,
+            }]}
+            yield f"data: {json.dumps(chunk)}\n\n"
+    elif content:
+        # Emit content in one chunk
+        chunk = {**base, "choices": [{"index": 0,
+            "delta": {"role": "assistant", "content": content}, "finish_reason": None}]}
+        yield f"data: {json.dumps(chunk)}\n\n"
+
+    # Final chunk with finish_reason + usage
+    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
+             "usage": usage}
+    yield f"data: {json.dumps(final)}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+# --- /v1/responses (OpenAI Responses API — used by FreeCode 1.2+) ---
 
 def _responses_input_to_messages(input_items: list) -> list[dict]:
     """Convert Responses API input array → Chat Completions messages list."""
@@ -279,7 +339,7 @@ def _responses_tools_to_chat_tools(tools: list) -> list:
 
 
 async def responses_completions(request: Request) -> Response:
-    """POST /v1/responses — OpenAI Responses API for OpenCode 1.2+ compatibility."""
+    """POST /v1/responses — OpenAI Responses API for FreeCode 1.2+ compatibility."""
     try:
         body = await request.json()
     except Exception:
@@ -460,7 +520,7 @@ async def proxy_health(request: Request) -> Response:
 
 
 async def list_models(request: Request) -> Response:
-    """GET /v1/models — return a fake models list so OpenCode can validate the endpoint."""
+    """GET /v1/models — return a fake models list so FreeCode can validate the endpoint."""
     return JSONResponse({
         "object": "list",
         "data": [

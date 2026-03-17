@@ -585,7 +585,8 @@ async def lifespan(application: FastAPI):
         ("browse",    "Extract readable text from a URL"),
         ("chrome",    "Toggle Chrome browser integration"),
         ("model",     "Switch AI model: sonnet|opus|haiku"),
-        
+        ("cli",       "Switch CLI backend or show router status"),
+
         # System
         ("server",    "Restart the bridge server"),
     ])
@@ -1049,7 +1050,16 @@ async def process_update(body: dict) -> None:
 
 async def _run_polling() -> None:
     """Long-poll Telegram for updates when running without a webhook."""
+    # Drain any pending backlog so we don't replay messages sent while offline.
     offset = 0
+    try:
+        pending = await get_updates(offset=0, timeout=0)
+        if pending:
+            offset = pending[-1]["update_id"] + 1
+            logger.info("Skipped %d stale update(s) from backlog (offset now %d)", len(pending), offset)
+    except Exception as exc:
+        logger.warning("Could not drain update backlog: %s", exc)
+
     logger.info("Polling loop started")
     while True:
         try:
@@ -1315,17 +1325,31 @@ def _fmt_tokens(n: int) -> str:
     return str(n)
 
 
+_FOOTER_SEP = "\n\n\u2014\n"
+
+
+def _strip_footer(response: str) -> str:
+    """Strip any previously embedded context footer from a response string."""
+    idx = response.find(_FOOTER_SEP)
+    return response[:idx] if idx != -1 else response
+
+
 def _context_footer(inst) -> str:
     """Build a context window usage footer for the response."""
-    if not inst or not inst.context_window:
+    if not inst:
         return ""
+    cli_name = inst.adapter_data.get("cli_router", {}).get("active_runner")
+    cli_str = f" \u00b7 via {cli_name}" if cli_name else ""
     used = (inst.last_input_tokens + inst.last_cache_read_tokens
             + inst.last_cache_creation_tokens + inst.last_output_tokens)
     if not used:
-        return ""
-    pct = (used / inst.context_window) * 100
+        return f"\n\n\u2014\n{cli_str.lstrip(' \u00b7 ')}" if cli_name else ""
     cost_str = f" \u00b7 ${inst.session_cost:.3f}" if inst.session_cost else ""
-    return f"\n\n\u2014\n\U0001f4ca {_fmt_tokens(used)} / {_fmt_tokens(inst.context_window)} ({pct:.1f}%){cost_str}"
+    if inst.context_window:
+        pct = (used / inst.context_window) * 100
+        return f"\n\n\u2014\n\U0001f4ca {_fmt_tokens(used)} / {_fmt_tokens(inst.context_window)} ({pct:.1f}%){cost_str}{cli_str}"
+    # No context window — show tokens used without percentage
+    return f"\n\n\u2014\n\U0001f4ca {_fmt_tokens(used)} tokens{cost_str}{cli_str}"
 
 
 # ── Auto-detect media files in responses ──────────────────────────
@@ -1509,7 +1533,7 @@ async def _process_message(chat_id: int, text: str, voice_reply: bool = False, i
     asyncio.ensure_future(memory_handler.store_conversation(text, response, user_id=user_id))
     asyncio.ensure_future(memory_handler.extract_and_save(text, response, user_id=user_id, owner_only=not _is_owner))
 
-    response += _context_footer(inst)
+    response = _strip_footer(response) + _context_footer(inst)
     labeled = _label(inst, response, proc_owner_id)
 
     if voice_reply:
@@ -1593,7 +1617,7 @@ async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", 
     elapsed = time.time() - start
 
     logger.info("%s #%d responded to photo in %.1fs (%d chars)", BOT_NAME, inst.id, elapsed, len(response))
-    response += _context_footer(inst)
+    response = _strip_footer(response) + _context_footer(inst)
     if thinking_msg_id:
         await delete_message(chat_id, thinking_msg_id)
     await send_message(chat_id, _label(inst, response, proc_owner_id), format_markdown=True)
@@ -1679,7 +1703,7 @@ async def _process_voice_message(chat_id: int, file_id: str, caption: str = "", 
     asyncio.ensure_future(memory_handler.extract_and_save(raw_prompt, response, user_id=user_id, owner_only=not _voice_is_owner))
 
     # Voice in -> voice + text out
-    response += _context_footer(inst)
+    response = _strip_footer(response) + _context_footer(inst)
     await _send_with_voice(chat_id, _label(inst, response, proc_owner_id))
 
     # Auto-detect and send any media files referenced in the response
@@ -1909,7 +1933,9 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "/clear \u2014 Kill all instances, reset to one Default\n"
             "/new \u2014 Reset conversation for the active instance\n"
             "/server \u2014 Restart bridge server\n"
-            f"/model {'<name>' if CLI_RUNNER == 'opencode' else 'sonnet|opus'} \u2014 Switch model [{(active.model.split('/')[-1] if '/' in active.model else (active.model.split('-')[1] if '-' in active.model else active.model) if active.model else 'default').capitalize()}]\n\n"
+            f"/model {'<name>' if CLI_RUNNER in ('opencode', 'freecode') else 'sonnet|opus'} \u2014 Switch model [{(active.model.split('/')[-1] if '/' in active.model else (active.model.split('-')[1] if '-' in active.model else active.model) if active.model else 'default').capitalize()}]\n"
+            + ("/cli [name|auto] \u2014 Switch CLI backend or show status\n" if CLI_RUNNER == "router" else "") +
+            "\n"
             "**Display**\n"
             "/show code | thoughts | both\n"
             "/hide code | thoughts | both\n\n"
@@ -1947,8 +1973,8 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         parts = text.split()
         if len(parts) < 2:
             inst = instances.get_active_for(owner_id)
-            current = inst.model or os.environ.get("OPENCODE_MODEL", "") or "(default)"
-            if CLI_RUNNER == "opencode":
+            current = inst.model or os.environ.get("FREECODE_MODEL", os.environ.get("OPENCODE_MODEL", "")) or "(default)"
+            if CLI_RUNNER in ("opencode", "freecode"):
                 usage_hint = "Usage: /model <name>\nShortcuts: free, litellm, mimo, deepseek, sonnet, opus\nOr full name: openrouter/anthropic/claude-sonnet-4"
             else:
                 usage_hint = "Usage: /model [sonnet|opus]"
@@ -1956,17 +1982,17 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         else:
             m = " ".join(parts[1:]).strip()
             new_model = None
-            # OpenCode runner: support shortcuts + full model names
-            if CLI_RUNNER == "opencode":
+            # FreeCode runner: support shortcuts + full model names
+            if CLI_RUNNER in ("opencode", "freecode"):
                 m_lower = m.lower()
-                _opencode_shortcuts = {
+                _freecode_shortcuts = {
                     "free": "litellm/free-agent",
                     "litellm": "litellm/free-agent",
-                    "mimo": "opencode/mimo-v2-flash-free",
-                    "pickle": "opencode/big-pickle",
-                    "nano": "opencode/gpt-5-nano",
-                    "minimax": "opencode/minimax-m2.5-free",
-                    "nemotron": "opencode/nemotron-3-super-free",
+                    "mimo": "freecode/mimo-v2-flash-free",
+                    "pickle": "freecode/big-pickle",
+                    "nano": "freecode/gpt-5-nano",
+                    "minimax": "freecode/minimax-m2.5-free",
+                    "nemotron": "freecode/nemotron-3-super-free",
                     "deepseek": "openrouter/deepseek/deepseek-chat-v3-0324",
                     "sonnet": "openrouter/anthropic/claude-sonnet-4",
                     "opus": "openrouter/anthropic/claude-opus-4",
@@ -1976,8 +2002,8 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                     "llama": "openrouter/meta-llama/llama-4-scout",
                     "qwen": "openrouter/qwen/qwen3-coder",
                 }
-                new_model = _opencode_shortcuts.get(m_lower)
-                if not new_model and ("/" in m or m.startswith("opencode") or m.startswith("openrouter") or m.startswith("ollama") or m.startswith("litellm")):
+                new_model = _freecode_shortcuts.get(m_lower)
+                if not new_model and ("/" in m or m.startswith("freecode") or m.startswith("openrouter") or m.startswith("ollama") or m.startswith("litellm")):
                     new_model = m  # accept full model name as-is
             else:
                 if "sonnet" in m.lower():
@@ -1990,11 +2016,57 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 inst.model = new_model
                 await send_message(chat_id, f"\u2705 Model for <b>#{instances.display_num(inst.id, owner_id)}</b> set to <code>{new_model}</code>", parse_mode="HTML")
             else:
-                if CLI_RUNNER == "opencode":
+                if CLI_RUNNER in ("opencode", "freecode"):
                     shortcuts = "free, litellm, mimo, pickle, nano, deepseek, sonnet, opus, haiku, gemini, gpt4o, llama, qwen"
                     await send_message(chat_id, f"\u274c Unknown model shortcut.\nAvailable: {shortcuts}\nOr pass a full model name like: openrouter/provider/model")
                 else:
                     await send_message(chat_id, "\u274c Invalid model. Choose 'sonnet' or 'opus'.")
+
+    elif cmd == "/cli":
+        from runners.cli_router import CLIRouterRunner
+        if not isinstance(runner, CLIRouterRunner):
+            await send_message(chat_id, "\u274c CLI router not active. Set <code>CLI_RUNNER=router</code> in .env to enable.", parse_mode="HTML")
+        else:
+            parts = text.split(maxsplit=1)
+            sub = parts[1].strip().lower() if len(parts) > 1 else ""
+            if not sub:
+                # Show status
+                status = runner.get_status()
+                pref = runner.preference
+                active_inst = instances.get_active_for(owner_id)
+                active_cli = runner.get_active_for(active_inst.id)
+                lines = [f"<b>\U0001f504 CLI Router</b> \u2014 {'auto' if pref == 'auto' else f'pinned to {pref}'}"]
+                for name in runner.runner_names:
+                    info = status[name]
+                    if name == active_cli:
+                        icon = "\u25b6\ufe0f"
+                        label = "active"
+                    elif info["available"]:
+                        icon = "\u2705"
+                        label = "ready"
+                    else:
+                        icon = "\u23f3"
+                        label = f"cooldown ({info['cooldown_remaining']}s)"
+                    lines.append(f"  {icon} <b>{name}</b> \u2014 {label}")
+                lines.append("")
+                lines.append("<code>/cli &lt;name&gt;</code> to pin  \u2022  <code>/cli auto</code> to rotate")
+                await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+            elif sub == "auto":
+                runner.set_preference("auto")
+                await send_message(chat_id, "\U0001f504 Auto-rotation enabled. Router will pick the best available CLI.")
+            elif sub == "next":
+                active_inst = instances.get_active_for(owner_id)
+                current = runner.get_active_for(active_inst.id)
+                next_cli = runner.skip_to_next(active_inst.id)
+                if next_cli:
+                    await send_message(chat_id, f"\u23e9 Skipped {current or 'none'} \u2192 <b>{next_cli}</b> (next message will use it)", parse_mode="HTML")
+                else:
+                    await send_message(chat_id, "\u274c No other CLIs available right now.")
+            elif runner.set_preference(sub):
+                await send_message(chat_id, f"\U0001f4cc Pinned to <b>{sub}</b>. Use <code>/cli auto</code> to re-enable rotation.", parse_mode="HTML")
+            else:
+                available = ", ".join(runner.runner_names)
+                await send_message(chat_id, f"\u274c Unknown CLI: {sub}\nAvailable: {available}, auto")
 
     elif cmd == "/list":
         await send_message(chat_id, instances.format_list(for_owner_id=owner_id), parse_mode="HTML")

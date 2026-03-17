@@ -56,6 +56,8 @@ except ImportError as e:
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 ENV_PATH = PROJECT_DIR / ".env"
+WA_ENV_PATH = Path.home() / ".jefe" / "secrets" / ".env.whatsapp"
+WA_RUNNER_URL = "http://127.0.0.1:8591"
 PORT = 7891
 _PLACEHOLDERS = {"your-bot-token-here", "your-telegram-user-id", ""}
 
@@ -240,7 +242,7 @@ CLI_OPTIONS = {
     "gemini":  {"label": "Gemini CLI",   "company": "Google",           "command": "gemini",  "install": "npm install -g @google/gemini-cli"},
     "codex":   {"label": "Codex CLI",    "company": "OpenAI",           "command": "codex",   "install": "npm install -g @openai/codex"},
     "qwen":    {"label": "Qwen Coder",   "company": "Alibaba / QwenLM", "command": "qwen",    "install": "npm install -g @qwen-code/qwen-code"},
-    "opencode": {"label": "OpenCode",    "company": "OpenCode AI",      "command": "opencode", "install": "npm install -g opencode-ai"},
+    "freecode": {"label": "FreeCode",    "company": "FreeCode",          "command": "freecode", "install": "Install from https://github.com/polancojoseph1/freecode"},
 }
 
 # ---------------------------------------------------------------------------
@@ -284,7 +286,7 @@ def get_config():
             result[pid] = {"configured": is_set(val), "value": "", "masked": mask(val) if is_set(val) else ""}
 
     # Core settings
-    for key in ["BOT_TOKEN", "ALLOWED_USER_ID", "CLI_RUNNER"]:
+    for key in ["TELEGRAM_BOT_TOKEN", "ALLOWED_USER_ID", "CLI_RUNNER"]:
         val = env.get(key, "")
         result[key] = {"configured": is_set(val), "value": val if key == "CLI_RUNNER" else "", "masked": mask(val) if is_set(val) else ""}
 
@@ -314,6 +316,92 @@ def clear_config(req: SaveRequest):
     unset_key(str(ENV_PATH), req.key)
     config_cache = read_env()
     return {"ok": True}
+
+
+@app.get("/api/wa-status")
+async def wa_status():
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{WA_RUNNER_URL}/wa/status")
+            return JSONResponse(r.json())
+    except Exception as e:
+        return JSONResponse({"bridge_reachable": False, "connected": False, "error": str(e)})
+
+
+@app.get("/api/wa-qr.png")
+async def wa_qr_proxy():
+    import httpx
+    from fastapi.responses import Response
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(f"{WA_RUNNER_URL}/wa/qr.png")
+            if r.status_code == 200:
+                return Response(content=r.content, media_type="image/png")
+    except Exception:
+        pass
+    return JSONResponse({"error": "QR not ready"}, status_code=404)
+
+
+class WaSaveRequest(BaseModel):
+    key: str
+    value: str
+
+
+@app.post("/api/save-wa")
+def save_wa_config(req: WaSaveRequest):
+    WA_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    set_key(str(WA_ENV_PATH), req.key, req.value)
+    return {"ok": True}
+
+
+@app.get("/api/wa-pairing-code")
+async def wa_pairing_code():
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{WA_RUNNER_URL}/wa/pairing-code")
+            # The bridgebot endpoint returns plain text; parse it out
+            text = r.text.strip()
+            # Extract just the code (format: XXXX-XXXX)
+            import re
+            match = re.search(r'\b([A-Z0-9]{4}-[A-Z0-9]{4})\b', text)
+            if match:
+                return JSONResponse({"code": match.group(1)})
+    except Exception:
+        pass
+    return JSONResponse({"code": None})
+
+
+@app.post("/api/restart-wa-bridge")
+async def restart_wa_bridge():
+    import subprocess, os
+    plist = os.path.expanduser("~/Library/LaunchAgents/jefe.whatsapp-bridge.plist")
+    auth_dir = os.path.expanduser("~/.jefe/wa-auth")
+    try:
+        subprocess.run(["launchctl", "unload", plist], capture_output=True)
+        import time; time.sleep(1)
+        # Clear stale pairing code so poll detects the new one
+        for f in ["pairing_code.txt", "pairing_code.ready"]:
+            p = os.path.join(auth_dir, f)
+            if os.path.exists(p):
+                os.remove(p)
+        subprocess.run(["launchctl", "load", plist], capture_output=True)
+        return JSONResponse({"ok": True})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)})
+
+
+@app.get("/api/config-wa")
+def get_wa_config():
+    wa_env = dict(dotenv_values(str(WA_ENV_PATH))) if WA_ENV_PATH.exists() else {}
+    phone = wa_env.get("WA_PHONE_NUMBER", "")
+    owner_jid = wa_env.get("WA_OWNER_JID", "")
+    return JSONResponse({
+        "phone_set": bool(phone.strip()),
+        "phone_masked": mask(phone) if phone.strip() else "",
+        "owner_jid": owner_jid,
+    })
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -870,16 +958,22 @@ const CLI_OPTIONS = {cli_options_json};
 // State
 // ---------------------------------------------------------------------------
 let config = {{}};
+let waConfig = {{}};
+let tgExpanded = true;
+let waExpanded = false;
 let currentStep = 0;
-const STEPS = ['Welcome', 'Telegram', 'AI Runner', 'Free Keys', 'Done'];
+const STEPS = ['Welcome', 'Platform', 'AI Runner', 'Free Keys', 'Done'];
 
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 async function boot() {{
-  config = await fetch('/api/config').then(r => r.json());
+  [config, waConfig] = await Promise.all([
+    fetch('/api/config').then(r => r.json()),
+    fetch('/api/config-wa').then(r => r.json()).catch(() => ({{}})),
+  ]);
   // Determine starting step
-  if (!config.BOT_TOKEN?.configured) currentStep = 1;
+  if (!config.TELEGRAM_BOT_TOKEN?.configured) currentStep = 1;
   else if (!config.ALLOWED_USER_ID?.configured) currentStep = 1;
   else if (!config.CLI_RUNNER?.value) currentStep = 2;
   else if (config.CLI_RUNNER?.value === 'free') currentStep = 3;
@@ -930,7 +1024,10 @@ function nextStep() {{
 function renderStep() {{
   const el = document.getElementById('mainContent');
   if (currentStep === 0) el.innerHTML = renderWelcome();
-  else if (currentStep === 1) el.innerHTML = renderTelegram();
+  else if (currentStep === 1) {{
+    el.innerHTML = renderPlatform();
+    if (selectedPlatform === 'whatsapp') setTimeout(checkWaStatus, 100);
+  }}
   else if (currentStep === 2) el.innerHTML = renderRunner();
   else if (currentStep === 3) el.innerHTML = renderFreeKeys();
   else el.innerHTML = renderDone();
@@ -970,12 +1067,57 @@ function renderWelcome() {{
 }}
 
 // ---------------------------------------------------------------------------
-// Step 1: Telegram
+// Step 1: Platform
 // ---------------------------------------------------------------------------
-function renderTelegram() {{
-  const tokenSet = config.BOT_TOKEN?.configured;
+function renderPlatform() {{
+  const tgReady = config.TELEGRAM_BOT_TOKEN?.configured && config.ALLOWED_USER_ID?.configured;
+  const waConnected = waConfig.connected;
+  return `
+  <div class="card">
+    <div class="card-title">Configure Your Platforms</div>
+    <div class="card-sub">
+      Set up one or both platforms — click a card to expand its settings. Telegram and WhatsApp can run side by side.
+    </div>
+    <div class="runner-grid mt-4">
+      <div class="runner-card ${{tgExpanded ? 'selected' : ''}}" onclick="togglePlatformSection('telegram')">
+        <div style="font-size:28px;margin-bottom:8px">✈️</div>
+        <div class="runner-name">Telegram</div>
+        <div class="runner-desc">Create a bot via @BotFather. Fast setup, rich features, works worldwide.</div>
+        ${{tgReady ? '<div class="runner-status status-ok" style="margin-top:8px">✓ Configured</div>' : ''}}
+      </div>
+      <div class="runner-card ${{waExpanded ? 'selected' : ''}}" onclick="togglePlatformSection('whatsapp')">
+        <div style="font-size:28px;margin-bottom:8px">💬</div>
+        <div class="runner-name">WhatsApp</div>
+        <div class="runner-desc">Link your existing WhatsApp. QR or phone number pairing.</div>
+        ${{waConnected
+          ? '<div class="runner-status status-ok" style="margin-top:8px">✓ Connected</div>'
+          : '<div style="font-size:11px;color:var(--muted);margin-top:8px">Optional</div>'}}
+      </div>
+    </div>
+  </div>
+  ${{tgExpanded ? renderTelegramFields() : ''}}
+  ${{waExpanded ? renderWhatsAppSetup() : ''}}
+  <div class="card">
+    <div class="btn-row">
+      ${{tgReady
+        ? `<button class="btn btn-primary" onclick="nextStep()">Continue →</button>`
+        : `<button class="btn btn-secondary" onclick="saveAndContinue()">Save & Continue →</button>`
+      }}
+      <button class="btn btn-ghost" onclick="nextStep()">Skip for now</button>
+    </div>
+  </div>`;
+}}
+
+function togglePlatformSection(p) {{
+  if (p === 'telegram') tgExpanded = !tgExpanded;
+  else waExpanded = !waExpanded;
+  renderStep();
+}}
+
+function renderTelegramFields() {{
+  const tokenSet = config.TELEGRAM_BOT_TOKEN?.configured;
   const uidSet = config.ALLOWED_USER_ID?.configured;
-  const tokenMasked = config.BOT_TOKEN?.masked || '';
+  const tokenMasked = config.TELEGRAM_BOT_TOKEN?.masked || '';
   const uidMasked = config.ALLOWED_USER_ID?.masked || '';
 
   return `
@@ -997,7 +1139,7 @@ function renderTelegram() {{
           onfocus="if(this.value===this.getAttribute('data-masked'))this.value=''"
           data-masked="${{tokenMasked}}"
         />
-        ${{tokenSet ? `<button class="clear-btn" onclick="clearCoreKey('BOT_TOKEN')" title="Clear">✕</button>` : ''}}
+        ${{tokenSet ? `<button class="clear-btn" onclick="clearCoreKey('TELEGRAM_BOT_TOKEN')" title="Clear">✕</button>` : ''}}
         <button class="toggle-eye" onclick="toggleEye('botToken', this)" title="Show/hide">👁</button>
       </div>
       ${{tokenSet ? `<div class="saved-badge">✓ Saved: ${{tokenMasked}}</div>` : `
@@ -1026,22 +1168,160 @@ function renderTelegram() {{
       </div>`}}
     </div>
 
-    <div class="btn-row">
-      ${{tokenSet && uidSet
-        ? `<button class="btn btn-primary" onclick="nextStep()">Continue →</button>`
-        : `<button class="btn btn-secondary" onclick="saveAndContinue()">Save & Continue →</button>`
-      }}
-      <button class="btn btn-ghost" onclick="nextStep()">Skip for now</button>
-    </div>
   </div>`;
+}}
+
+function renderWhatsAppSetup() {{
+  const phoneSet = waConfig.phone_set;
+  const phoneMasked = waConfig.phone_masked || '';
+  return `
+  <div class="card" id="wa-setup-card">
+    <div class="card-title">Link WhatsApp</div>
+    <div class="card-sub">
+      Two ways to link your WhatsApp account. Enter your number below for a pairing code, or scan the QR code directly.
+    </div>
+
+    <div id="wa-status-banner" style="margin:16px 0;padding:12px 16px;border-radius:8px;font-size:14px;background:var(--bg);border:1px solid var(--border);color:var(--muted)">
+      Checking connection...
+    </div>
+
+    <div style="margin-top:20px">
+      <div style="font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px">Option B — Phone number pairing</div>
+      <div class="field">
+        <label class="field-label">WhatsApp Phone Number</label>
+        <div class="input-wrapper">
+          <input class="field-input ${{phoneSet ? 'saved' : ''}}" id="waPhone" type="text"
+            placeholder="16465551234 (digits only, include country code)"
+            value="${{phoneSet ? phoneMasked : ''}}"
+            onfocus="if(this.value===this.getAttribute('data-masked'))this.value=''"
+            data-masked="${{phoneMasked}}"
+          />
+        </div>
+        <div class="field-hint">Include country code, digits only — e.g. US: 16465551234.</div>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="saveWaPhone()">Save &amp; Get Pairing Code</button>
+
+      <div id="wa-pairing-box" style="display:none;margin-top:20px;padding:20px;background:var(--bg);border:2px solid var(--blue);border-radius:12px;text-align:center">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:10px">Open WhatsApp → <strong>Linked Devices</strong> → <strong>Link a Device</strong> → <strong>Link with phone number instead</strong> → enter this code</div>
+        <div id="wa-pairing-code" style="font-size:40px;font-weight:700;letter-spacing:.2em;color:var(--fg);font-family:monospace">——————</div>
+        <div style="margin-top:12px;display:flex;align-items:center;justify-content:center;gap:12px">
+          <div id="wa-pairing-countdown" style="font-size:13px;color:var(--yellow)"></div>
+          <button class="btn btn-ghost btn-sm" onclick="refreshPairingCode()">↻ New Code</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin:24px 0 12px;font-size:13px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Option A — QR Code</div>
+    <div style="text-align:center;padding:20px;background:var(--bg);border:1px solid var(--border);border-radius:10px">
+      <img id="wa-qr-img" src="/api/wa-qr.png?t=${{Date.now()}}" style="width:220px;height:220px;border-radius:8px;display:block;margin:0 auto"
+        onerror="this.style.display='none';document.getElementById('wa-qr-none').style.display='block'"
+        onload="this.style.display='block';document.getElementById('wa-qr-none').style.display='none'"
+      />
+      <div id="wa-qr-none" style="display:none;padding:32px 16px;color:var(--muted);font-size:14px">
+        QR not ready yet. Make sure the WhatsApp bridge is running, then click Refresh.
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px;justify-content:center">
+        <button class="btn btn-secondary btn-sm" onclick="refreshWaQr()">↻ Refresh QR</button>
+        <button class="btn btn-secondary btn-sm" onclick="checkWaStatus()">Check Status</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">QR expires every ~20s — click Refresh if it expires before you scan</div>
+    </div>
+
+  </div>`;
+}}
+
+async function checkWaStatus() {{
+  const banner = document.getElementById('wa-status-banner');
+  if (!banner) return;
+  try {{
+    const r = await fetch('/api/wa-status').then(r => r.json());
+    waConfig.connected = r.connected;
+    if (r.connected) {{
+      banner.style.cssText = 'margin:16px 0;padding:12px 16px;border-radius:8px;font-size:14px;background:var(--green-dim);border:1px solid var(--green);color:var(--green)';
+      banner.innerHTML = '✅ WhatsApp connected! Your bot is ready to receive messages on WhatsApp.';
+    }} else if (!r.bridge_reachable) {{
+      banner.style.cssText = 'margin:16px 0;padding:12px 16px;border-radius:8px;font-size:14px;background:var(--bg);border:1px solid var(--yellow);color:var(--yellow)';
+      banner.innerHTML = '⚠ WhatsApp bridge not reachable. Make sure <strong>jefe.whatsapp-bridge</strong> is running (<code>launchctl list | grep jefe</code>).';
+    }} else {{
+      banner.style.cssText = 'margin:16px 0;padding:12px 16px;border-radius:8px;font-size:14px;background:var(--blue-dim);border:1px solid var(--blue);color:var(--blue)';
+      banner.innerHTML = '⏳ Bridge is running but not yet linked. Scan the QR code below to connect your WhatsApp account.';
+    }}
+  }} catch(e) {{
+    if (banner) banner.innerHTML = '⚠ Could not reach WhatsApp runner at port 8591.';
+  }}
+}}
+
+function refreshWaQr() {{
+  const img = document.getElementById('wa-qr-img');
+  const none = document.getElementById('wa-qr-none');
+  if (!img) return;
+  img.style.display = 'block';
+  if (none) none.style.display = 'none';
+  img.src = `/api/wa-qr.png?t=${{Date.now()}}`;
+}}
+
+let _pairingPollTimer = null;
+let _pairingCountdownTimer = null;
+let _pairingExpiry = 0;
+
+async function saveWaPhone() {{
+  const input = document.getElementById('waPhone');
+  if (!input) return;
+  const val = input.value.replace(/\\D/g, '');
+  if (!val || val.length < 7) return showToast('Enter a valid phone number (digits only)', true);
+  await fetch('/api/save-wa', {{
+    method: 'POST',
+    headers: {{'Content-Type': 'application/json'}},
+    body: JSON.stringify({{key: 'WA_PHONE_NUMBER', value: val}})
+  }});
+  waConfig.phone_set = true;
+  waConfig.phone_masked = val.slice(0,3) + '...' + val.slice(-2);
+  input.classList.add('saved');
+  showToast('✓ Phone number saved — fetching pairing code…');
+  startPairingCodePoll();
+}}
+
+async function refreshPairingCode() {{
+  // Restart the bridge to generate a fresh code, then poll
+  await fetch('/api/restart-wa-bridge', {{ method: 'POST' }}).catch(() => {{}});
+  showToast('↻ Requesting fresh code…');
+  startPairingCodePoll();
+}}
+
+function startPairingCodePoll() {{
+  const box = document.getElementById('wa-pairing-box');
+  const codeEl = document.getElementById('wa-pairing-code');
+  if (box) box.style.display = 'block';
+  if (codeEl) codeEl.textContent = '…';
+  clearInterval(_pairingPollTimer);
+  clearInterval(_pairingCountdownTimer);
+  _pairingPollTimer = setInterval(async () => {{
+    try {{
+      const r = await fetch('/api/wa-pairing-code').then(r => r.json());
+      if (r.code) {{
+        clearInterval(_pairingPollTimer);
+        if (codeEl) codeEl.textContent = r.code;
+        _pairingExpiry = Date.now() + 58000; // ~58s countdown
+        clearInterval(_pairingCountdownTimer);
+        _pairingCountdownTimer = setInterval(() => {{
+          const secs = Math.max(0, Math.round((_pairingExpiry - Date.now()) / 1000));
+          const cd = document.getElementById('wa-pairing-countdown');
+          if (cd) cd.textContent = secs > 0 ? `Expires in ${{secs}}s` : 'Expired — click New Code';
+          if (secs === 0) clearInterval(_pairingCountdownTimer);
+        }}, 1000);
+      }}
+    }} catch(e) {{}}
+  }}, 2000);
+  // Stop polling after 30s if no code appears
+  setTimeout(() => clearInterval(_pairingPollTimer), 30000);
 }}
 
 async function onTokenChange(el) {{
   const val = el.value.trim();
   if (val.length > 20) {{
-    await saveKey('BOT_TOKEN', val);
+    await saveKey('TELEGRAM_BOT_TOKEN', val);
     el.classList.add('saved');
-    config.BOT_TOKEN = {{configured: true, masked: val.slice(0,4)+'...'+val.slice(-3)}};
+    config.TELEGRAM_BOT_TOKEN = {{configured: true, masked: val.slice(0,4)+'...'+val.slice(-3)}};
     showToast('✓ Bot token saved');
   }}
 }}
@@ -1059,7 +1339,7 @@ async function onUserIdChange(el) {{
 function saveAndContinue() {{
   const token = document.getElementById('botToken')?.value.trim();
   const uid = document.getElementById('userId')?.value.trim();
-  if (token && token.length > 20) saveKey('BOT_TOKEN', token);
+  if (token && token.length > 20) saveKey('TELEGRAM_BOT_TOKEN', token);
   if (uid && /^\\d{{5,}}$/.test(uid)) saveKey('ALLOWED_USER_ID', uid);
   nextStep();
 }}
@@ -1082,7 +1362,7 @@ function renderRunner() {{
   <div class="card">
     <div class="card-title">Choose Your AI</div>
     <div class="card-sub">
-      Pick which AI powers your bot. <strong>Free Bot (OpenCode)</strong> rotates across 11 free providers automatically — perfect if you don't want to pay anything.
+      Pick which AI powers your bot. <strong>Free Bot (FreeCode)</strong> rotates across 11 free providers automatically — perfect if you don't want to pay anything.
     </div>
 
     <div class="mt-4">
@@ -1090,11 +1370,11 @@ function renderRunner() {{
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <div style="flex:1;min-width:200px">
             <div class="runner-name" style="font-size:18px">
-              ⚡ Free Bot (OpenCode)
+              ⚡ Free Bot (FreeCode)
               <span style="font-size:11px;color:var(--green);background:var(--green-dim);padding:2px 8px;border-radius:4px;margin-left:8px;font-weight:700;letter-spacing:0.05em">RECOMMENDED</span>
             </div>
-            <div class="runner-company" style="margin-top:4px">11 Providers · Rotates Automatically · $0/month · Powered by OpenCode &amp; OpenRouter</div>
-            <div class="runner-desc" style="margin-top:6px">When one provider hits its limit, it instantly switches to the next. The more keys you add, the harder it is to ever hit a wall. Uses <strong>OpenCode</strong> for code tasks and routes through <strong>OpenRouter</strong> for model access.</div>
+            <div class="runner-company" style="margin-top:4px">11 Providers · Rotates Automatically · $0/month · Powered by FreeCode &amp; OpenRouter</div>
+            <div class="runner-desc" style="margin-top:6px">When one provider hits its limit, it instantly switches to the next. The more keys you add, the harder it is to ever hit a wall. Uses <strong>FreeCode</strong> for code tasks and routes through <strong>OpenRouter</strong> for model access.</div>
           </div>
           <div style="font-size:26px;font-weight:700;color:var(--green);font-family:monospace;white-space:nowrap;padding:8px 16px;background:var(--green-dim);border-radius:8px">${{freeCount}}/11</div>
         </div>
@@ -1336,11 +1616,12 @@ function skipProvider(i) {{
 // Step 4: Done
 // ---------------------------------------------------------------------------
 function renderDone() {{
-  const tokenOk = config.BOT_TOKEN?.configured;
+  const tokenOk = config.TELEGRAM_BOT_TOKEN?.configured;
   const uidOk = config.ALLOWED_USER_ID?.configured;
   const runnerOk = config.CLI_RUNNER?.configured;
   const runner = config.CLI_RUNNER?.value || '';
   const freeCount = countConfigured();
+  const waConnected = waConfig.connected;
   const allGood = tokenOk && uidOk && runnerOk;
 
   return `
@@ -1355,7 +1636,7 @@ function renderDone() {{
         <div class="summary-icon">${{tokenOk ? '✅' : '⚠️'}}</div>
         <div class="summary-row-text">
           <div class="summary-row-label">Bot Token</div>
-          <div class="summary-row-val">${{tokenOk ? config.BOT_TOKEN?.masked : 'Not set'}}</div>
+          <div class="summary-row-val">${{tokenOk ? config.TELEGRAM_BOT_TOKEN?.masked : 'Not set'}}</div>
         </div>
       </div>
       <div class="summary-row ${{uidOk ? 'ok' : 'warn'}}">
@@ -1370,6 +1651,13 @@ function renderDone() {{
         <div class="summary-row-text">
           <div class="summary-row-label">AI Runner</div>
           <div class="summary-row-val">${{runner || 'Not set'}}</div>
+        </div>
+      </div>
+      <div class="summary-row ${{waConnected ? 'ok' : ''}}">
+        <div class="summary-icon">${{waConnected ? '✅' : '➖'}}</div>
+        <div class="summary-row-text">
+          <div class="summary-row-label">WhatsApp</div>
+          <div class="summary-row-val">${{waConnected ? 'Connected' : 'Not linked (optional)'}}</div>
         </div>
       </div>
       ${{runner === 'free' ? `
@@ -1399,7 +1687,7 @@ function renderDone() {{
     </div>`}}
 
     <div class="btn-row mt-4">
-      <button class="btn btn-secondary" onclick="goStep(1)">← Edit Telegram</button>
+      <button class="btn btn-secondary" onclick="goStep(1)">← Edit Platform</button>
       <button class="btn btn-secondary" onclick="goStep(2)">← Edit Runner</button>
       ${{runner === 'free' ? `<button class="btn btn-secondary" onclick="goStep(3)">← Edit Free Keys</button>` : ''}}
     </div>

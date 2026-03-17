@@ -1,8 +1,8 @@
-"""OpenCode CLI runner adapter.
+"""FreeCode CLI runner adapter.
 
-Subprocess: opencode run --format json --session <id> "prompt"
-Session: opencode-assigned session IDs (ses_...), --continue for subsequent calls
-System prompt: prepended to user message (opencode has no --append-system-prompt flag)
+Subprocess: freecode run --format json --session <id> "prompt"
+Session: freecode-assigned session IDs (ses_...), --continue for subsequent calls
+System prompt: prepended to user message (freecode has no --append-system-prompt flag)
 Output format: NDJSON events — step_start, text, tool_use, step_finish, error
 """
 
@@ -11,17 +11,18 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
 from typing import Callable, Awaitable
 
 from runners.base import RunnerBase, _SUBPROCESS_LOGGER
 
-logger = logging.getLogger("bridge.opencode")
+logger = logging.getLogger("bridge.freecode")
 
 
-class OpenCodeRunner(RunnerBase):
-    name = "opencode"
-    cli_command = "opencode"
+class FreeCodeBaseRunner(RunnerBase):
+    name = "freecode"
+    cli_command = "freecode"
 
     def __init__(self):
         from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
@@ -31,19 +32,19 @@ class OpenCodeRunner(RunnerBase):
         self.memory_enabled = MEMORY_ENABLED
 
     def discover_binary(self) -> str:
-        """Use OPENCODE_BIN_PATH if set, otherwise fall back to PATH lookup."""
+        """Use FREECODE_BIN_PATH if set, otherwise fall back to PATH lookup."""
         import shutil
-        custom = os.environ.get("OPENCODE_BIN_PATH")
+        custom = os.environ.get("FREECODE_BIN_PATH")
         if custom:
             import stat as _stat
             expanded = os.path.expanduser(custom)
             if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
                 return expanded
-            raise FileNotFoundError(f"OPENCODE_BIN_PATH={custom!r} not found or not executable")
+            raise FileNotFoundError(f"FREECODE_BIN_PATH={custom!r} not found or not executable")
         path = shutil.which(self.cli_command)
         if path is None:
             raise FileNotFoundError(
-                f"{self.cli_command} CLI not found in PATH. Is opencode-ai installed?"
+                f"{self.cli_command} CLI not found in PATH. Install from https://github.com/polancojoseph1/freecode"
             )
         return path
 
@@ -66,14 +67,14 @@ class OpenCodeRunner(RunnerBase):
         return False
 
     async def kill_all(self) -> int:
-        return self._kill_processes("opencode run")
+        return self._kill_processes("freecode run")
 
     async def run_query(self, prompt: str, timeout: int = 120) -> str:
         """Stateless one-shot query. No session, no memory, no progress."""
         try:
             binary = self.discover_binary()
         except FileNotFoundError:
-            return '{"error": "opencode CLI not found"}'
+            return '{"error": "freecode CLI not found"}'
 
         env = dict(os.environ)
         cmd = [binary, "run", "--format", "json", prompt]
@@ -86,7 +87,7 @@ class OpenCodeRunner(RunnerBase):
                 env=env,
             )
         except OSError as exc:
-            return f'{{"error": "Failed to start opencode: {exc}"}}'
+            return f'{{"error": "Failed to start freecode: {exc}"}}'
 
         try:
             stdout_data, stderr_data = await asyncio.wait_for(
@@ -142,15 +143,20 @@ class OpenCodeRunner(RunnerBase):
         try:
             binary = self.discover_binary()
         except FileNotFoundError:
-            return "\u274c Error: opencode CLI not found. Is it installed? (npm install -g opencode-ai)"
+            return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
 
         env = dict(os.environ)
         session_started = instance.session_started
 
         # Determine model — instance.model or env override
-        model = getattr(instance, "model", None) or os.environ.get("OPENCODE_MODEL", "")
+        model = getattr(instance, "model", None) or os.environ.get("FREECODE_MODEL", "")
 
         cmd = [binary, "run", "--format", "json"]
+
+        # Custom fork: pass --steps if FREECODE_MAX_STEPS is set
+        max_steps = os.environ.get("FREECODE_MAX_STEPS")
+        if max_steps:
+            cmd += ["--steps", max_steps]
 
         if model:
             cmd += ["-m", model]
@@ -160,7 +166,7 @@ class OpenCodeRunner(RunnerBase):
             cmd += ["--session", instance.session_id]
 
         # Build the prompt with system context prepended
-        # (opencode doesn't have --append-system-prompt, so we prepend to the message)
+        # (freecode doesn't have --append-system-prompt, so we prepend to the message)
         system_parts = []
         if instance.agent_system_prompt:
             system_parts.append(instance.agent_system_prompt)
@@ -219,8 +225,8 @@ class OpenCodeRunner(RunnerBase):
             )
             instance.process = proc
         except OSError as exc:
-            logger.exception("OS error running opencode")
-            return f"\u274c Error starting opencode: {exc}"
+            logger.exception("OS error running freecode")
+            return f"\u274c Error starting freecode: {exc}"
 
         # Record subprocess info for crash recovery
         instance.subprocess_pid = proc.pid
@@ -234,6 +240,7 @@ class OpenCodeRunner(RunnerBase):
         _usage: dict = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
         _captured_session_id: str = ""
         _session_corrupt: bool = False
+        _last_progress_time: list[float] = [time.monotonic()]  # mutable for closure
 
         async def _flush_text_as_progress():
             nonlocal _pending_text
@@ -286,12 +293,14 @@ class OpenCodeRunner(RunnerBase):
                     title = state.get("title", "")
 
                     if on_progress:
-                        progress = self._format_opencode_tool(tool_name, tool_input, title)
+                        progress = self._format_freecode_tool(tool_name, tool_input, title)
                         if progress:
                             _any_progress_sent = True
+                            _last_progress_time[0] = time.monotonic()
                             await on_progress(progress)
                         elif not _any_progress_sent:
                             _any_progress_sent = True
+                            _last_progress_time[0] = time.monotonic()
                             await on_progress("\U0001f4c2 Working...")
 
                 elif event_type == "step_finish":
@@ -306,7 +315,7 @@ class OpenCodeRunner(RunnerBase):
                     err_data = data.get("error", {})
                     err_name = err_data.get("name", "Error")
                     err_msg = err_data.get("data", {}).get("message", str(err_data))
-                    logger.error("[opencode] %s: %s", err_name, err_msg)
+                    logger.error("[freecode] %s: %s", err_name, err_msg)
                     # Detect Mistral/LiteLLM tool call mismatch — session must be reset
                     _corrupt_keywords = ("invalid_request_message_order", "not the same number of function calls")
                     if any(k in err_msg.lower() for k in _corrupt_keywords):
@@ -316,9 +325,21 @@ class OpenCodeRunner(RunnerBase):
 
             await proc.wait()
 
+        _KEEPALIVE_INTERVAL = 180  # seconds between "still working" pings
+
+        async def _keepalive():
+            """Send a periodic heartbeat when no progress has been sent for a while."""
+            while True:
+                await asyncio.sleep(30)
+                if on_progress and time.monotonic() - _last_progress_time[0] >= _KEEPALIVE_INTERVAL:
+                    _last_progress_time[0] = time.monotonic()
+                    await on_progress("\u23f3 Still working...")
+
+        _keepalive_task = asyncio.create_task(_keepalive())
         try:
             await asyncio.wait_for(process_stream(), timeout=self.timeout)
         except asyncio.TimeoutError:
+            _keepalive_task.cancel()
             try:
                 proc.kill()
                 await proc.wait()
@@ -328,7 +349,9 @@ class OpenCodeRunner(RunnerBase):
             instance.subprocess_pid = 0
             instance.subprocess_log_file = ""
             instance.subprocess_start_time = ""
-            return "\u23f0 OpenCode took too long to respond (timed out)."
+            return "\u23f0 FreeCode took too long to respond (timed out)."
+        finally:
+            _keepalive_task.cancel()
 
         instance.process = None
 
@@ -351,7 +374,7 @@ class OpenCodeRunner(RunnerBase):
             instance.subprocess_start_time = ""
 
         if proc.returncode != 0:
-            logger.error("opencode exited %d (see log: %s)", proc.returncode, log_path)
+            logger.error("freecode exited %d (see log: %s)", proc.returncode, log_path)
             try:
                 with open(log_path, "r", errors="replace") as _f:
                     _log_tail = _f.read()[-2000:]
@@ -362,11 +385,11 @@ class OpenCodeRunner(RunnerBase):
             instance.subprocess_start_time = ""
             _log_lower = _log_tail.lower()
             if "auth" in _log_lower or "unauthorized" in _log_lower:
-                return "\u274c OpenCode auth error. Check your API keys or run `opencode` to configure."
+                return "\u274c FreeCode auth error. Check your API keys or run `freecode` to configure."
             if "session" in _log_lower:
                 self.new_session(instance)
                 return "\u274c Session error. New conversation started \u2014 please resend your message."
-            return "\u274c OpenCode exited with an error."
+            return "\u274c FreeCode exited with an error."
 
         # Corrupt session: tool call / response mismatch rejected by Mistral
         if _session_corrupt:
@@ -375,37 +398,48 @@ class OpenCodeRunner(RunnerBase):
 
         if _pending_text:
             return _pending_text
-        return "(empty response from OpenCode)"
+        return "(empty response from FreeCode)"
 
     @staticmethod
-    def _format_opencode_tool(tool_name: str, tool_input: dict, title: str) -> str:
-        """Format an opencode tool call into a human-readable progress string."""
+    def _format_freecode_tool(tool_name: str, tool_input: dict, title: str) -> str:
+        """Format a freecode tool call into a human-readable progress string.
+
+        FreeCode events use camelCase keys (filePath, dirPath) while some tools
+        use snake_case. We check both to ensure nothing is silently dropped.
+        """
         name_lower = tool_name.lower()
+
+        def _get(*keys: str) -> str:
+            for k in keys:
+                v = tool_input.get(k, "")
+                if v:
+                    return str(v)
+            return ""
+
         if name_lower in ("bash", "shell", "run_shell_command", "exec_command"):
-            cmd = tool_input.get("command", tool_input.get("cmd", ""))
+            cmd = _get("command", "cmd")
             desc = title or cmd[:200]
             return f"\u26a1 Shell: {desc}" if desc else "\u26a1 Shell"
         elif name_lower in ("edit", "edit_file", "write", "write_file", "apply_patch"):
-            path = tool_input.get("file_path", tool_input.get("path", ""))
+            path = _get("filePath", "file_path", "path")
             return f"\u270f\ufe0f Edit: {path}" if path else f"\u270f\ufe0f {title or tool_name}"
         elif name_lower in ("read", "read_file"):
-            path = tool_input.get("file_path", tool_input.get("path", ""))
-            return f"\U0001f4c4 Read: {path}" if path else ""
+            path = _get("filePath", "file_path", "path")
+            return f"\U0001f4c4 Read: {path}"  if path else f"\U0001f4c4 Read"
         elif name_lower in ("list_directory", "ls", "glob"):
-            path = tool_input.get("dir_path", tool_input.get("path", ""))
-            return f"\U0001f4c2 List: {path}" if path else ""
+            target = _get("pattern", "dirPath", "dir_path", "path")
+            return f"\U0001f4c2 Glob: {target}" if target else f"\U0001f4c2 List"
         elif name_lower in ("grep", "grep_search", "search"):
-            query = tool_input.get("query", tool_input.get("pattern", ""))
-            return f"\U0001f50d Grep: {query[:80]}" if query else ""
+            query = _get("query", "pattern", "regex")
+            return f"\U0001f50d Grep: {query[:80]}" if query else f"\U0001f50d Search"
         elif name_lower in ("web_fetch", "fetch"):
-            url = tool_input.get("url", "")
-            return f"\U0001f310 Fetch: {url}"
+            url = _get("url")
+            return f"\U0001f310 Fetch: {url}" if url else f"\U0001f310 Fetch"
         elif name_lower in ("web_search", "google_web_search"):
-            query = tool_input.get("query", tool_input.get("search_query", ""))
-            return f"\U0001f50e Search: {query}"
+            query = _get("query", "search_query")
+            return f"\U0001f50e Search: {query}" if query else f"\U0001f50e Web search"
         elif name_lower in ("question", "ask", "ask_followup_question", "ask_user"):
-            # Silent — OpenCode's interactive question tool, not useful as a progress msg
-            return ""
+            return ""  # interactive question — not useful as progress
         elif tool_name:
             return f"\U0001f527 {title or tool_name}"
         return ""

@@ -5,6 +5,7 @@ Each peer has a tier ("family" | "friend" | "acquaintance") and a
 shared token that THEY send in X-Collab-Token to authenticate as that peer.
 """
 
+import hmac
 import json
 import logging
 import os
@@ -32,12 +33,12 @@ def _ensure_data_dir() -> None:
 
 def load_peers() -> dict:
     """Load peer registry from disk. Returns empty dict if file does not exist."""
-    if not os.path.exists(_PEERS_FILE):
-        return {}
     try:
         with open(_PEERS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
     except Exception as e:
         logger.error("Failed to load collab peers from %s: %s", _PEERS_FILE, e)
         return {}
@@ -54,13 +55,24 @@ def save_peers(peers: dict) -> None:
 
 
 def get_peer_by_token(token: str) -> tuple[str, dict] | None:
-    """Find a peer by the token they send. Returns (name, peer_dict) or None."""
+    """Find a peer by the token they send. Returns (name, peer_dict) or None.
+
+    Uses hmac.compare_digest and always iterates all peers to prevent
+    timing side-channel attacks.
+    """
     if not token:
         return None
     peers = load_peers()
+    match_name: str | None = None
+    match_peer: dict | None = None
     for name, peer in peers.items():
-        if peer.get("token") == token:
-            return (name, peer)
+        peer_token = peer.get("token", "")
+        if hmac.compare_digest(peer_token, token):
+            # Don't break early — iterate all peers to avoid timing leaks
+            match_name = name
+            match_peer = peer
+    if match_name is not None:
+        return (match_name, match_peer)
     return None
 
 

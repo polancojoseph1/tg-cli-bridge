@@ -1,248 +1,139 @@
-"""Free runner — rotates across multiple free-tier API providers.
+"""Free runner — thin wrapper that spawns the freecode CLI.
 
-Providers tried in order. On 429 rate limit, automatically rotates to
-the next provider. Each provider uses the OpenAI-compatible API format.
-Qwen Coder is a CLI-based provider that slots in automatically if installed.
+freecode is a CLI agent pre-configured with free-tier provider
+rotation (Groq, Cerebras, SambaNova, Gemini, OpenRouter, Together,
+Mistral, Hugging Face, NVIDIA NIM, Ollama). Provider selection and
+rotation happen inside the freecode CLI — this runner just talks to it.
 
-Supported providers (all free tier):
-  - Groq        (llama-3.3-70b, very fast, generous RPM)
-  - Cerebras    (llama-3.3-70b, ultra-fast ~2000 t/s)
-  - SambaNova   (llama-3.3-70b, very fast, 400 req/day)
-  - Gemini Flash (google AI studio free tier, 1500 req/day)
-  - OpenRouter   (aggregates free models, no key needed for some)
-  - Together AI  (free credits on signup)
-  - Mistral      (free tier on small models)
-  - Cohere       (REMOVED — rejects tool_calls + text content in same message)
-  - Hugging Face (free inference API, hundreds of models)
-  - NVIDIA NIM   (free credits on hosted models)
-  - Qwen Coder   (CLI-based, 1000 req/day via qwen.ai OAuth — auto-detected if installed)
+Binary lookup: FREECODE_BIN_PATH env var, then PATH lookup for "freecode".
+Model override: FREECODE_MODEL env var.
 
-Configure in .env:
-  GROQ_API_KEY=...
-  CEREBRAS_API_KEY=...
-  SAMBANOVA_API_KEY=...
-  GEMINI_API_KEY=...
-  OPENROUTER_API_KEY=...
-  TOGETHER_API_KEY=...
-  MISTRAL_API_KEY=...
-  COHERE_API_KEY=...
-  HF_API_KEY=...
-  NVIDIA_API_KEY=...
-  # Qwen: no key needed — install with: npm install -g @qwen-code/qwen-code
-  # then run `qwen` once to complete OAuth login
+Output: NDJSON events identical to freecode — text, tool_use, step_finish, error.
 """
 
 import asyncio
-import base64
-import copy
+import json
 import logging
 import os
 import shutil
-import tempfile
+import sys
 import time
-from dataclasses import dataclass, field
-from typing import Callable, Awaitable, Any
+from typing import Callable, Awaitable
 
-import httpx
-
-from runners.base import RunnerBase
+from runners.base import RunnerBase, _SUBPROCESS_LOGGER
+from runners.freecode import FreeCodeBaseRunner
 
 logger = logging.getLogger("bridge.free")
 
-# --- Provider definitions ---
+# ---------------------------------------------------------------------------
+# Provider rotation infrastructure (used by free_proxy.py)
+# ---------------------------------------------------------------------------
 
-@dataclass
+RATE_LIMIT_COOLDOWN = 60.0   # seconds before retrying a rate-limited provider
+ERROR_COOLDOWN      = 15.0   # seconds before retrying after a transient error
+
+
 class Provider:
-    name: str
-    base_url: str
-    model: str
-    api_key: str
-    # Cooldown tracking — set when provider hits a rate limit
-    _cooldown_until: float = field(default=0.0, repr=False)
-    _cooldown_seconds: float = field(default=60.0, repr=False)
+    """A single free-tier OpenAI-compatible API provider with cooldown tracking."""
+
+    def __init__(self, name: str, base_url: str, api_key: str, model: str):
+        self.name = name
+        self.base_url = base_url
+        self.api_key = api_key
+        self.model = model
+        self._cooldown_until: float = 0.0
+        self._success_count: int = 0
 
     def is_available(self) -> bool:
         return bool(self.api_key) and time.time() >= self._cooldown_until
 
     def mark_rate_limited(self):
-        self._cooldown_until = time.time() + self._cooldown_seconds
-        logger.info("[free] %s rate limited — cooling down for %ds", self.name, self._cooldown_seconds)
+        self._cooldown_until = time.time() + RATE_LIMIT_COOLDOWN
+        logger.info("[free] %s → rate limited, cooldown %.0fs", self.name, RATE_LIMIT_COOLDOWN)
 
     def mark_success(self):
-        # Reset cooldown on success
-        self._cooldown_until = 0.0
+        self._success_count += 1
 
 
-@dataclass
 class QwenCLIProvider:
-    """Qwen Coder CLI provider — uses subprocess instead of HTTP API."""
-    name: str = "Qwen Coder"
-    # Longer cooldown: quota errors are daily limits, not temporary rate limits
-    _cooldown_until: float = field(default=0.0, repr=False)
-    _cooldown_seconds: float = field(default=3600.0, repr=False)
+    """Qwen CLI provider — no API key, auto-detected if qwen binary is in PATH."""
 
-    def is_available(self) -> bool:
-        return shutil.which("qwen") is not None and time.time() >= self._cooldown_until
+    name = "qwen"
 
     def is_configured(self) -> bool:
         return shutil.which("qwen") is not None
 
-    def mark_rate_limited(self):
-        self._cooldown_until = time.time() + self._cooldown_seconds
-        logger.info("[free] %s quota hit — cooling down for %ds", self.name, self._cooldown_seconds)
-
-    def mark_success(self):
-        self._cooldown_until = 0.0
+    def is_available(self) -> bool:
+        return self.is_configured()
 
 
-def _messages_to_prompt(messages: list[dict]) -> str:
-    """Convert OpenAI-format message list to a flat text prompt for CLI tools."""
-    parts = []
-    for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", "")
-        # Handle multipart content (e.g. image + text blocks)
-        if isinstance(content, list):
-            content = " ".join(
-                block.get("text", "") for block in content if block.get("type") == "text"
-            )
-        if role == "system":
-            parts.append(f"[Instructions: {content}]")
-        elif role == "user":
-            parts.append(f"User: {content}")
-        elif role == "assistant":
-            parts.append(f"Assistant: {content}")
-    return "\n\n".join(parts)
+def _build_providers() -> list:
+    """Build the ordered list of free-tier providers from environment variables."""
+    providers: list = []
+
+    def _add(name: str, base_url: str, key_env: str, model_env: str, default_model: str,
+             extra_key_env: str = ""):
+        api_key = os.environ.get(key_env, "")
+        if not api_key and extra_key_env:
+            api_key = os.environ.get(extra_key_env, "")
+        model = os.environ.get(model_env, default_model)
+        providers.append(Provider(name=name, base_url=base_url, api_key=api_key, model=model))
+
+    # Priority order: fastest / most generous first
+    _add("groq",        "https://api.groq.com/openai/v1",
+         "GROQ_API_KEY",       "GROQ_MODEL",       "llama-3.3-70b-versatile")
+    _add("cerebras",    "https://api.cerebras.ai/v1",
+         "CEREBRAS_API_KEY",   "CEREBRAS_MODEL",   "qwen-3-235b-a22b-instruct-2507")
+    _add("sambanova",   "https://api.sambanova.ai/v1",
+         "SAMBANOVA_API_KEY",  "SAMBANOVA_MODEL",  "Meta-Llama-3.3-70B-Instruct")
+    _add("gemini",      "https://generativelanguage.googleapis.com/v1beta/openai",
+         "GEMINI_API_KEY",     "GEMINI_FREE_MODEL","gemini-2.0-flash",
+         extra_key_env="GOOGLE_GENERATIVE_AI_API_KEY")
+    _add("openrouter",  "https://openrouter.ai/api/v1",
+         "OPENROUTER_API_KEY", "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+    _add("together",    "https://api.together.xyz/v1",
+         "TOGETHER_API_KEY",   "TOGETHER_MODEL",   "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free")
+    _add("mistral",     "https://api.mistral.ai/v1",
+         "MISTRAL_API_KEY",    "MISTRAL_MODEL",    "mistral-small-latest")
+    _add("cohere",      "https://api.cohere.com/compatibility/v1",
+         "COHERE_API_KEY",     "COHERE_MODEL",     "command-r-plus-08-2024")
+    _add("huggingface", "https://api-inference.huggingface.co/v1",
+         "HF_API_KEY",         "HF_MODEL",         "meta-llama/Llama-3.3-70B-Instruct")
+    _add("nvidia",      "https://integrate.api.nvidia.com/v1",
+         "NVIDIA_API_KEY",     "NVIDIA_MODEL",     "meta/llama-3.3-70b-instruct")
+
+    # Qwen CLI — no key needed
+    providers.append(QwenCLIProvider())
+
+    configured = [p.name for p in providers
+                  if (isinstance(p, QwenCLIProvider) and p.is_configured())
+                  or (isinstance(p, Provider) and p.api_key)]
+    logger.info("[free] Providers with keys: %s", configured)
+    return providers
 
 
-def _build_providers() -> list[Provider | QwenCLIProvider]:
-    """Build provider list from environment variables."""
-    return [
-        Provider(
-            name="Groq",
-            base_url="https://api.groq.com/openai/v1",
-            model=os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile"),
-            api_key=os.environ.get("GROQ_API_KEY", ""),
-        ),
-        Provider(
-            name="Cerebras",
-            base_url="https://api.cerebras.ai/v1",
-            model=os.environ.get("CEREBRAS_MODEL", "llama-3.3-70b"),
-            api_key=os.environ.get("CEREBRAS_API_KEY", ""),
-        ),
-        Provider(
-            name="SambaNova",
-            base_url="https://api.sambanova.ai/v1",
-            model=os.environ.get("SAMBANOVA_MODEL", "Meta-Llama-3.3-70B-Instruct"),
-            api_key=os.environ.get("SAMBANOVA_API_KEY", ""),
-        ),
-        Provider(
-            name="Gemini Flash",
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
-            model=os.environ.get("GEMINI_FREE_MODEL", "gemini-2.0-flash"),
-            api_key=os.environ.get("GEMINI_API_KEY", ""),
-        ),
-        Provider(
-            name="OpenRouter",
-            base_url="https://openrouter.ai/api/v1",
-            model=os.environ.get("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"),
-            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-        ),
-        Provider(
-            name="Together AI",
-            base_url="https://api.together.xyz/v1",
-            model=os.environ.get("TOGETHER_MODEL", "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"),
-            api_key=os.environ.get("TOGETHER_API_KEY", ""),
-        ),
-        Provider(
-            name="Mistral",
-            base_url="https://api.mistral.ai/v1",
-            model=os.environ.get("MISTRAL_MODEL", "mistral-small-latest"),
-            api_key=os.environ.get("MISTRAL_API_KEY", ""),
-        ),
-        # Cohere removed — its compatibility API rejects assistant messages with both
-        # tool_calls + content, which OpenCode generates during agentic tool use.
-        Provider(
-            name="Hugging Face",
-            base_url="https://api-inference.huggingface.co/v1",
-            model=os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct"),
-            api_key=os.environ.get("HF_API_KEY", ""),
-        ),
-        Provider(
-            name="NVIDIA NIM",
-            base_url="https://integrate.api.nvidia.com/v1",
-            model=os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"),
-            api_key=os.environ.get("NVIDIA_API_KEY", ""),
-        ),
-        # Qwen Coder — CLI-based, auto-detected if installed. No API key needed.
-        QwenCLIProvider(),
-    ]
-
-
-class FreeRunner(RunnerBase):
+class FreeCodeRunner(FreeCodeBaseRunner):
     name = "free"
-    cli_command = ""  # No CLI binary — uses direct HTTP API
+    cli_command = "freecode"
 
-    def __init__(self):
-        self.providers = _build_providers()
-        self.timeout = int(os.environ.get("CLI_TIMEOUT", "120"))
-
-        # Validate and cache config at startup (bad values silently kill all providers otherwise)
-        try:
-            self.max_tokens = int(os.environ.get("FREE_MAX_TOKENS", "4096"))
-            if self.max_tokens <= 0:
-                raise ValueError("must be > 0")
-        except ValueError as e:
-            logger.error("[free] Bad FREE_MAX_TOKENS: %s — using 4096", e)
-            self.max_tokens = 4096
-
-        try:
-            self.temperature = float(os.environ.get("FREE_TEMPERATURE", "0.7"))
-            if not (0.0 <= self.temperature <= 2.0):
-                raise ValueError("must be in [0.0, 2.0]")
-        except ValueError as e:
-            logger.error("[free] Bad FREE_TEMPERATURE: %s — using 0.7", e)
-            self.temperature = 0.7
-
-        # Persistent HTTP client — reused across all requests for connection pooling
-        self.client = httpx.AsyncClient()
-
-        available = [
-            p.name for p in self.providers
-            if (isinstance(p, QwenCLIProvider) and p.is_configured()) or
-               (isinstance(p, Provider) and p.api_key)
-        ]
-        logger.info("[free] Loaded providers: %s", available or ["none — add API keys to .env"])
-
-    # --- Runner interface ---
-
-    def new_session(self, instance) -> None:
-        instance.session_started = False
-        instance.conversation_history = []
-
-    async def stop(self, instance) -> bool:
-        # HTTP calls can't be cancelled mid-flight cleanly
-        # Just flag it — the next poll will see was_stopped
-        instance.was_stopped = True
-        return True
+    def discover_binary(self) -> str:
+        """Use FREECODE_BIN_PATH if set, otherwise fall back to PATH lookup."""
+        custom = os.environ.get("FREECODE_BIN_PATH")
+        if custom:
+            expanded = os.path.expanduser(custom)
+            if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+                return expanded
+            raise FileNotFoundError(f"FREECODE_BIN_PATH={custom!r} not found or not executable")
+        path = shutil.which(self.cli_command)
+        if path is None:
+            raise FileNotFoundError(
+                f"{self.cli_command} CLI not found in PATH. "
+                "Install from https://github.com/polancojoseph1/freecode"
+            )
+        return path
 
     async def kill_all(self) -> int:
-        return 0  # No long-running processes
-
-    def is_available(self) -> bool:
-        for p in self.providers:
-            if isinstance(p, QwenCLIProvider) and p.is_configured():
-                return True
-            if isinstance(p, Provider) and p.api_key:
-                return True
-        return False
-
-    async def run_query(self, prompt: str, timeout: int = 120) -> str:
-        """Stateless one-shot query — no session history."""
-        return await self._call_with_rotation(
-            messages=[{"role": "user", "content": prompt}],
-            timeout=timeout,
-        )
+        return self._kill_processes("freecode run")
 
     async def run(
         self,
@@ -257,240 +148,243 @@ class FreeRunner(RunnerBase):
     ) -> str:
         instance.was_stopped = False
 
-        # Initialize conversation history on instance if not present
-        if not hasattr(instance, "conversation_history"):
-            instance.conversation_history = []
+        try:
+            binary = self.discover_binary()
+        except FileNotFoundError:
+            return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
 
-        # Build messages
-        messages = []
+        env = dict(os.environ)
+        session_started = instance.session_started
 
-        # System prompt with memory context
+        model = getattr(instance, "model", None) or os.environ.get("FREECODE_MODEL", "")
+
+        cmd = [binary, "run", "--format", "json"]
+
+        max_steps = os.environ.get("FREECODE_MAX_STEPS") or os.environ.get("OPENCODE_MAX_STEPS")
+        if max_steps:
+            cmd += ["--steps", max_steps]
+
+        if model:
+            cmd += ["-m", model]
+
+        if session_started and instance.session_id:
+            cmd += ["--session", instance.session_id]
+
+        # Build system prompt
         system_parts = []
+        if instance.agent_system_prompt:
+            system_parts.append(instance.agent_system_prompt)
+        else:
+            if self.memory_enabled:
+                user_md_path = os.path.join(self.memory_dir, "USER.md")
+                user_md_hint = (
+                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
+                    if os.path.exists(user_md_path) else ""
+                )
+                system_parts.append(
+                    f"You have a persistent memory system at {self.memory_dir}/. "
+                    + user_md_hint
+                    + f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
+                    "If you learn new important facts during this conversation "
+                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
+                    f"update the appropriate file in {self.memory_dir}/ using the edit or write tool. "
+                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
+                    "For new topics, create a new .md file with a descriptive name. "
+                    "Only update when there's genuinely new durable information — not for transient questions."
+                )
+            if self.system_prompt:
+                system_parts.append(self.system_prompt)
         if memory_context:
             system_parts.append(memory_context)
-        system_prompt = os.environ.get("CLI_SYSTEM_PROMPT", "")
-        if system_prompt:
-            system_parts.append(system_prompt)
-        if system_parts:
-            messages.append({"role": "system", "content": "\n\n".join(system_parts)})
 
-        # Prior conversation turns — deep copy to prevent mutation of stored history
-        messages.extend(copy.deepcopy(instance.conversation_history))
-
-        # Current user message
-        user_content = message
         if image_path:
-            # Validate path (prevent traversal) and size before encoding
-            try:
-                real_path = os.path.realpath(image_path)
-                tmp_dir = os.path.realpath(tempfile.gettempdir())
-                if os.path.commonpath([real_path, tmp_dir]) != tmp_dir:
-                    return "❌ Invalid image path."
-                with open(real_path, "rb") as f:
-                    img_data = f.read()
-                if len(img_data) > 10 * 1024 * 1024:
-                    return "❌ Image too large (max 10MB)."
-                img_b64 = base64.b64encode(img_data).decode()
-                ext = os.path.splitext(real_path)[1].lower().lstrip(".")
-                mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
-                        "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/jpeg")
-                user_content = [
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{img_b64}"}},
-                    {"type": "text", "text": message or "What's in this image?"},
-                ]
-            except Exception as e:
-                logger.warning("[free] Could not encode image: %s", e)
-                return f"❌ Could not process image: {e}"
-
-        messages.append({"role": "user", "content": user_content})
-
-        result = await self._call_with_rotation(
-            messages=messages, timeout=self.timeout, on_progress=on_progress
-        )
-
-        if instance.was_stopped:
-            return "🛑 Stopped."
-
-        if not result.startswith("❌"):
-            # Trim BEFORE appending so we never exceed 40 messages (20 turns)
-            if len(instance.conversation_history) >= 40:
-                instance.conversation_history = instance.conversation_history[-38:]
-            instance.conversation_history.append({"role": "user", "content": message})
-            instance.conversation_history.append({"role": "assistant", "content": result})
-            instance.session_started = True
-
-        return result
-
-    # --- Core rotation logic ---
-
-    async def _call_with_rotation(
-        self,
-        messages: list[dict],
-        timeout: int = 120,
-        on_progress: Callable[[str], Awaitable[None]] | None = None,
-    ) -> str:
-        """Try each available provider in order. Rotate on 429 or error."""
-        available = [p for p in self.providers if p.is_available()]
-
-        if not available:
-            configured = [
-                p for p in self.providers
-                if (isinstance(p, QwenCLIProvider) and p.is_configured()) or
-                   (isinstance(p, Provider) and p.api_key)
-            ]
-            if configured:
-                soonest = min(configured, key=lambda p: p._cooldown_until)
-                wait = max(0, soonest._cooldown_until - time.time())
-                return f"❌ All free providers are temporarily busy. Try again in {wait:.0f}s."
-            return "❌ No providers configured. Add GROQ_API_KEY, GEMINI_API_KEY, etc. to your .env (or install Qwen: npm install -g @qwen-code/qwen-code)"
-
-        last_error = ""
-        deadline = time.time() + timeout  # Global timeout across all rotation attempts
-
-        for provider in available:
-            remaining = int(deadline - time.time())
-            if remaining <= 5:
-                return "❌ Timed out waiting for a free API response."
-
-            if on_progress:
-                await on_progress(f"🔄 Trying {provider.name}...")
-
-            if isinstance(provider, QwenCLIProvider):
-                logger.info("[free] Trying provider: %s (CLI)", provider.name)
-            else:
-                logger.info("[free] Trying provider: %s (%s)", provider.name, provider.model)
-
-            try:
-                if isinstance(provider, QwenCLIProvider):
-                    response = await self._call_qwen_provider(provider, messages, remaining)
-                else:
-                    response = await self._call_provider(provider, messages, remaining)
-                provider.mark_success()
-                logger.info("[free] Success via %s", provider.name)
-                return response
-
-            except RateLimitError:
-                provider.mark_rate_limited()
-                logger.info("[free] Rotating away from %s", provider.name)
-                continue
-
-            except ProviderError as e:
-                last_error = str(e)
-                logger.warning("[free] %s error: %s", provider.name, e)
-                # Short backoff on transient errors to avoid hammering the same provider
-                if isinstance(provider, Provider):
-                    provider._cooldown_until = time.time() + 15.0
-                continue
-
-            except Exception as e:
-                last_error = str(e)
-                logger.warning("[free] %s unexpected error: %s", provider.name, e)
-                continue
-
-        return f"❌ All providers failed. Last error: {last_error}"
-
-    async def _call_provider(self, provider: Provider, messages: list[dict], timeout: int) -> str:
-        """Make a single API call to a provider. Raises RateLimitError on 429."""
-        headers = {
-            "Authorization": f"Bearer {provider.api_key}",
-            "Content-Type": "application/json",
-        }
-        # OpenRouter needs these for free tier
-        if "openrouter" in provider.base_url:
-            headers["HTTP-Referer"] = "https://bridgebot.local"
-            headers["X-Title"] = "Bridgebot"
-
-        payload = {
-            "model": provider.model,
-            "messages": messages,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
-        }
-
-        try:
-            resp = await self.client.post(
-                f"{provider.base_url}/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=timeout,
+            prompt = (
+                f"Look at the image file at: {image_path}\n\n{message}"
+                if message
+                else f"Look at the image file at: {image_path}\n\nDescribe what you see in the image."
             )
-        except httpx.TimeoutException:
-            raise ProviderError(f"{provider.name} timed out")
-        except httpx.HTTPError as e:
-            raise ProviderError(f"{provider.name} network error: {type(e).__name__}")
+        else:
+            prompt = message
 
-        if resp.status_code == 429:
-            raise RateLimitError(f"{provider.name} rate limited")
+        if system_parts and not session_started:
+            prompt = "[System Instructions]\n" + "\n\n".join(system_parts) + "\n\n[User Message]\n" + prompt
 
-        if resp.status_code != 200:
-            raise ProviderError(f"{provider.name} returned {resp.status_code}")
+        cmd.append(prompt)
 
-        try:
-            data = resp.json()
-        except Exception:
-            raise ProviderError(f"{provider.name} returned non-JSON response")
+        log_path = self.make_log_path(self.name, chat_id, instance.id)
+        log_start_offset = os.path.getsize(log_path) if os.path.exists(log_path) else 0
 
-        choices = data.get("choices", [])
-        if not choices:
-            raise ProviderError(f"{provider.name} returned empty response")
-
-        try:
-            return choices[0]["message"]["content"].strip()
-        except (KeyError, IndexError) as e:
-            raise ProviderError(f"{provider.name} unexpected response format: {e}") from e
-
-
-    async def _call_qwen_provider(self, provider: QwenCLIProvider, messages: list[dict], timeout: int) -> str:
-        """Run the Qwen CLI as a provider slot. Converts messages to flat prompt text."""
-        binary = shutil.which("qwen")
-        if not binary:
-            raise ProviderError("Qwen CLI not found in PATH")
-
-        prompt = _messages_to_prompt(messages)
-        cmd = [binary, "--yolo", "--output-format", "text", prompt]
+        wrapper_cmd = [sys.executable, _SUBPROCESS_LOGGER, log_path] + cmd
 
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                *wrapper_cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=env,
                 cwd=os.path.expanduser("~"),
+                start_new_session=True,
             )
-            try:
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=float(timeout))
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except ProcessLookupError:
-                    pass
-                raise ProviderError("Qwen CLI timed out")
-        except OSError as e:
-            raise ProviderError(f"Failed to start Qwen CLI: {e}")
+            instance.process = proc
+        except OSError as exc:
+            logger.exception("OS error running freecode")
+            return f"\u274c Error starting freecode: {exc}"
 
-        output = stdout.decode(errors="replace").strip()
-        err = stderr.decode(errors="replace").strip()
+        instance.subprocess_pid = proc.pid
+        instance.subprocess_log_file = log_path
+        instance.subprocess_start_time = self.get_pid_start_time(proc.pid) or ""
+        if on_subprocess_started:
+            on_subprocess_started(proc.pid, log_path, instance.subprocess_start_time)
+
+        _pending_text: str = ""
+        _usage: dict = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
+        _captured_session_id: str = ""
+        _session_corrupt: bool = False
+        _last_progress_time: list[float] = [time.monotonic()]
+
+        async def _flush_text_as_progress():
+            nonlocal _pending_text
+            if _pending_text and on_progress:
+                text = _pending_text
+                for fence in ("```", "~~~"):
+                    if fence in text:
+                        text = text[:text.index(fence)]
+                text = text.strip()
+                if text:
+                    await on_progress(f"\U0001f4ad {text}")
+            _pending_text = ""
+
+        async def process_stream():
+            nonlocal _captured_session_id, _pending_text, _session_corrupt
+            _any_progress_sent = False
+
+            async for line, _offset in self.tail_log_file(log_path, start_offset=log_start_offset, proc=proc):
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = data.get("type", "")
+                sid = data.get("sessionID", "")
+                if sid and not _captured_session_id:
+                    _captured_session_id = sid
+
+                if event_type == "text":
+                    text = data.get("part", {}).get("text", "")
+                    if text:
+                        await _flush_text_as_progress()
+                        _pending_text = text
+
+                elif event_type == "tool_use":
+                    await _flush_text_as_progress()
+                    part = data.get("part", {})
+                    state = part.get("state", {})
+                    tool_name = part.get("tool", "")
+                    tool_input = state.get("input", {})
+                    title = state.get("title", "")
+                    if on_progress:
+                        progress = self._format_freecode_tool(tool_name, tool_input, title)
+                        if progress:
+                            _any_progress_sent = True
+                            _last_progress_time[0] = time.monotonic()
+                            await on_progress(progress)
+                        elif not _any_progress_sent:
+                            _any_progress_sent = True
+                            _last_progress_time[0] = time.monotonic()
+                            await on_progress("\U0001f4c2 Working...")
+
+                elif event_type == "step_finish":
+                    part = data.get("part", {})
+                    tokens = part.get("tokens", {})
+                    if tokens:
+                        _usage["input_tokens"] += tokens.get("input", 0)
+                        _usage["output_tokens"] += tokens.get("output", 0)
+                    _usage["cost"] += part.get("cost", 0.0)
+
+                elif event_type == "error":
+                    err_data = data.get("error", {})
+                    err_name = err_data.get("name", "Error")
+                    err_msg = err_data.get("data", {}).get("message", str(err_data))
+                    logger.error("[freecode] %s: %s", err_name, err_msg)
+                    _corrupt_keywords = ("invalid_request_message_order", "not the same number of function calls")
+                    if any(k in err_msg.lower() for k in _corrupt_keywords):
+                        _session_corrupt = True
+                    elif on_progress:
+                        await on_progress(f"\u274c {err_name}: {err_msg[:200]}")
+
+            await proc.wait()
+
+        _KEEPALIVE_INTERVAL = 180
+
+        async def _keepalive():
+            while True:
+                await asyncio.sleep(30)
+                if on_progress and time.monotonic() - _last_progress_time[0] >= _KEEPALIVE_INTERVAL:
+                    _last_progress_time[0] = time.monotonic()
+                    await on_progress("\u23f3 Still working...")
+
+        _keepalive_task = asyncio.create_task(_keepalive())
+        try:
+            await asyncio.wait_for(process_stream(), timeout=self.timeout)
+        except asyncio.TimeoutError:
+            _keepalive_task.cancel()
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            instance.process = None
+            instance.subprocess_pid = 0
+            instance.subprocess_log_file = ""
+            instance.subprocess_start_time = ""
+            return "\u23f0 FreeCode took too long to respond (timed out)."
+        finally:
+            _keepalive_task.cancel()
+
+        instance.process = None
+
+        if instance.was_stopped:
+            instance.was_stopped = False
+            instance.subprocess_pid = 0
+            instance.subprocess_log_file = ""
+            instance.subprocess_start_time = ""
+            return "\U0001f6d1 Stopped."
+
+        if proc.returncode == 0:
+            instance.session_started = True
+            if _captured_session_id:
+                instance.session_id = _captured_session_id
+            instance.last_input_tokens = _usage.get("input_tokens", 0)
+            instance.last_output_tokens = _usage.get("output_tokens", 0)
+            instance.session_cost += _usage.get("cost", 0.0)
+            instance.subprocess_pid = 0
+            instance.subprocess_log_file = ""
+            instance.subprocess_start_time = ""
 
         if proc.returncode != 0:
-            err_lower = err.lower()
-            # Match specific quota/rate patterns — avoid false positives on numeric strings
-            if any(p in err_lower for p in ["quota exceeded", "rate limit", "too many requests", "daily limit"]):
-                raise RateLimitError("Qwen quota reached")
-            if any(p in err_lower for p in ["authentication", "unauthorized", "please login", "not logged in"]):
-                raise ProviderError("Qwen needs re-authentication — open a terminal and run: qwen")
-            raise ProviderError(f"Qwen CLI exited {proc.returncode}: {err[:200]}")
+            logger.error("freecode exited %d (see log: %s)", proc.returncode, log_path)
+            try:
+                with open(log_path, "r", errors="replace") as _f:
+                    _log_tail = _f.read()[-2000:]
+            except OSError:
+                _log_tail = ""
+            instance.subprocess_pid = 0
+            instance.subprocess_log_file = ""
+            instance.subprocess_start_time = ""
+            _log_lower = _log_tail.lower()
+            if "auth" in _log_lower or "unauthorized" in _log_lower:
+                return "\u274c FreeCode auth error. Check your API keys or run `freecode` to configure."
+            if "session" in _log_lower:
+                self.new_session(instance)
+                return "\u274c Session error. New conversation started \u2014 please resend your message."
+            return "\u274c FreeCode exited with an error."
 
-        if output:
-            return output
-        if err:
-            raise ProviderError(f"Qwen returned no output. stderr: {err[:200]}")
-        raise ProviderError("Qwen returned empty output")
+        if _session_corrupt:
+            self.new_session(instance)
+            return "\u26a0\ufe0f Session had corrupt tool call history. Session has been reset \u2014 please resend your message."
 
-
-# --- Custom exceptions ---
-
-class RateLimitError(Exception):
-    """Raised when a provider returns HTTP 429."""
-
-class ProviderError(Exception):
-    """Raised on any non-429 provider error."""
+        if _pending_text:
+            return _pending_text
+        return "(empty response from FreeCode)"
