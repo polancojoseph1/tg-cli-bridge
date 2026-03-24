@@ -51,19 +51,6 @@ class FreeCodeBaseRunner(RunnerBase):
         instance.session_started = False
         instance.session_cost = 0.0
 
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
-
     async def kill_all(self) -> int:
         return self._kill_processes("freecode run")
 

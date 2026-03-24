@@ -33,19 +33,6 @@ class CodexRunner(RunnerBase):
         instance.session_started = False
         instance.adapter_data.pop("thread_id", None)
 
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
-
     async def kill_all(self) -> int:
         return self._kill_processes("codex exec")
 
