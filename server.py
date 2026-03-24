@@ -807,6 +807,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# -- Security Headers Middleware ----------------------------------------------
+from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # -- Bridge Cloud v1 API router -----------------------------------------------
 from v1_api import router as v1_router, api_router as v1_api_router  # noqa: E402
 app.include_router(v1_router)
