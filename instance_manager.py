@@ -85,8 +85,24 @@ class InstanceManager:
         self._user_instance_map: dict[int, int] = {}   # user_id -> primary pinned instance_id
         self._instance_owner: dict[int, int] = {}      # instance_id -> owner_id (0 = global)
         self._user_active: dict[int, int] = {}         # owner_id -> their current active instance_id
+        self._owner_to_ids: dict[int, set[int]] = {}   # owner_id -> set of instance_ids
         # Create default instance on startup
         self.create("Default", owner_id=0)
+
+    def _set_owner(self, instance_id: int, owner_id: int) -> None:
+        old_owner = self._instance_owner.get(instance_id)
+        if old_owner is not None and old_owner != owner_id:
+            if old_owner in self._owner_to_ids:
+                self._owner_to_ids[old_owner].discard(instance_id)
+        self._instance_owner[instance_id] = owner_id
+        if owner_id not in self._owner_to_ids:
+            self._owner_to_ids[owner_id] = set()
+        self._owner_to_ids[owner_id].add(instance_id)
+
+    def _remove_owner(self, instance_id: int) -> None:
+        owner_id = self._instance_owner.pop(instance_id, None)
+        if owner_id is not None and owner_id in self._owner_to_ids:
+            self._owner_to_ids[owner_id].discard(instance_id)
 
     # ------------------------------------------------------------------
     # Active instance helpers
@@ -141,7 +157,7 @@ class InstanceManager:
         """
         inst = Instance(id=self._next_id, title=title)
         self._instances[self._next_id] = inst
-        self._instance_owner[self._next_id] = owner_id
+        self._set_owner(self._next_id, owner_id)
         if switch_active:
             self.set_active_for(owner_id, self._next_id)
         self._next_id += 1
@@ -187,7 +203,7 @@ class InstanceManager:
         if len(owner_instances) <= 1:
             return None  # Can't remove the last instance for this owner
         removed = self._instances.pop(instance_id)
-        self._instance_owner.pop(instance_id, None)
+        self._remove_owner(instance_id)
         # Update active if we just removed it
         if owner_id == 0 and instance_id == self._active_id:
             remaining = self.list_all(for_owner_id=0)
@@ -216,11 +232,11 @@ class InstanceManager:
         if number in self._instances:
             inst = self._instances[number]
             inst.title = title
-            self._instance_owner[number] = owner_id
+            self._set_owner(number, owner_id)
             return inst
         inst = Instance(id=number, title=title)
         self._instances[number] = inst
-        self._instance_owner[number] = owner_id
+        self._set_owner(number, owner_id)
         if number >= self._next_id:
             self._next_id = number + 1
         logger.info("Restored instance #%d: %s owner=%d", number, title, owner_id)
@@ -260,7 +276,7 @@ class InstanceManager:
         owner_id = user_id  # non-primary users own their own instances
         inst = Instance(id=self._next_id, title=title)
         self._instances[self._next_id] = inst
-        self._instance_owner[self._next_id] = owner_id
+        self._set_owner(self._next_id, owner_id)
         self._user_instance_map[user_id] = self._next_id
         self._user_active[owner_id] = self._next_id
         self._next_id += 1
@@ -311,21 +327,22 @@ class InstanceManager:
         """
         excluded_inst_ids: set[int] = set()
         if exclude_user_ids:
-            for inst_id, oid in self._instance_owner.items():
-                if oid in exclude_user_ids:
-                    excluded_inst_ids.add(inst_id)
+            for excl_id in exclude_user_ids:
+                if excl_id in self._owner_to_ids:
+                    excluded_inst_ids.update(self._owner_to_ids[excl_id])
 
-        def _keep(inst: Instance) -> bool:
-            if inst.id in excluded_inst_ids:
-                return False
-            if for_owner_id is None:
-                return True
-            return self._instance_owner.get(inst.id, 0) == for_owner_id
+        if for_owner_id is None:
+            # All instances
+            instances = self._instances.values()
+        else:
+            # Only instances for this owner
+            owner_ids = self._owner_to_ids.get(for_owner_id, set())
+            instances = (self._instances[i] for i in owner_ids if i in self._instances)
 
-        return sorted(
-            (i for i in self._instances.values() if _keep(i)),
-            key=lambda i: i.id,
-        )
+        if excluded_inst_ids:
+            instances = (inst for inst in instances if inst.id not in excluded_inst_ids)
+
+        return sorted(instances, key=lambda i: i.id)
 
     def format_list(self, for_owner_id: int | None = None, exclude_user_ids: set[int] | None = None, bot_name: str = "CLI") -> str:
         """Return a formatted HTML string of instances for display."""
