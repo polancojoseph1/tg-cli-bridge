@@ -115,12 +115,22 @@ class RunnerBase(ABC):
             The response text.
         """
 
-    @abstractmethod
     async def stop(self, instance: Any) -> bool:
         """Stop the running process for a specific instance.
 
         Returns True if a process was actually stopped.
         """
+        proc = instance.process
+        if proc is not None and proc.returncode is None:
+            instance.was_stopped = True
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            instance.process = None
+            return True
+        return False
 
     @abstractmethod
     def new_session(self, instance: Any) -> None:
