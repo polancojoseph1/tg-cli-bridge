@@ -32,3 +32,4 @@ python-multipart>=0.0.9
 # System dependencies (install separately):
 #   ffmpeg       — required for voice messages and /call audio conversion
 #   cloudflared  — or ngrok, for exposing local server to Telegram webhook
+slowapi>=0.1.9
