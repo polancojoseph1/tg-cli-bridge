@@ -1,5 +1,3 @@
-import os
-import sqlite3
 import pytest
 
 import agent_registry
@@ -19,7 +17,7 @@ def mock_agents_db(tmp_path, monkeypatch):
 
     # Initialize the database schema for the test
     # By calling _get_conn(), it will create the tables automatically
-    with agent_registry._get_conn() as conn:
+    with agent_registry._get_conn():
         pass
 
     return str(db_path)
