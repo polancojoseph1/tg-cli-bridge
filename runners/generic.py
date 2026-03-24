@@ -7,7 +7,6 @@ No session management, no streaming, plain text output.
 import asyncio
 import logging
 import os
-import re
 from typing import Callable, Awaitable
 
 from runners.base import RunnerBase
@@ -19,26 +18,13 @@ class GenericRunner(RunnerBase):
     name = "generic"
 
     def __init__(self):
-        from config import CLI_COMMAND, CLI_TIMEOUT
+        super().__init__()
+        from config import CLI_COMMAND
         self.cli_command = CLI_COMMAND
-        self.timeout = CLI_TIMEOUT
 
     def new_session(self, instance) -> None:
         """Generic runner has no session state — nothing to reset."""
         instance.session_started = False
-
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
 
     async def kill_all(self) -> int:
         return self._kill_processes(self.cli_command)
@@ -67,16 +53,13 @@ class GenericRunner(RunnerBase):
         except asyncio.TimeoutError:
             return '{"error": "timed out"}'
 
-        result = stdout_data.decode(errors="replace").strip()
-        if result:
-            return result
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            # Strip ANSI escape codes and control characters before returning
-            err = re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', err)
-            err = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', err)
-            return f"[error] {err[:500]}"
-        return "(no response)"
+        return self.decode_cli_output(
+            stdout_data,
+            stderr_data,
+            err_prefix="[error] ",
+            strip_ansi=True,
+            max_err_len=500,
+        )
 
     async def run(
         self,
