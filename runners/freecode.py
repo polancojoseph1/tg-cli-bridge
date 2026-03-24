@@ -346,9 +346,7 @@ class FreeCodeBaseRunner(RunnerBase):
             except ProcessLookupError:
                 pass
             instance.process = None
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\u23f0 FreeCode took too long to respond (timed out)."
         finally:
             _keepalive_task.cancel()
@@ -357,9 +355,7 @@ class FreeCodeBaseRunner(RunnerBase):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
 
         if proc.returncode == 0:
@@ -369,9 +365,7 @@ class FreeCodeBaseRunner(RunnerBase):
             instance.last_input_tokens = _usage.get("input_tokens", 0)
             instance.last_output_tokens = _usage.get("output_tokens", 0)
             instance.session_cost += _usage.get("cost", 0.0)
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
 
         if proc.returncode != 0:
             logger.error("freecode exited %d (see log: %s)", proc.returncode, log_path)
@@ -380,9 +374,7 @@ class FreeCodeBaseRunner(RunnerBase):
                     _log_tail = _f.read()[-2000:]
             except OSError:
                 _log_tail = ""
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             _log_lower = _log_tail.lower()
             if "auth" in _log_lower or "unauthorized" in _log_lower:
                 return "\u274c FreeCode auth error. Check your API keys or run `freecode` to configure."

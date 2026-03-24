@@ -126,6 +126,10 @@ class RunnerBase(ABC):
     def new_session(self, instance: Any) -> None:
         """Reset session state so the next message starts a fresh conversation."""
 
+    def _clear_subprocess_info(self, instance: Any) -> None:
+        """Clear subprocess tracking info from the instance."""
+        self._clear_subprocess_info(instance)
+
     async def stop_all(self, instances: list) -> int:
         """Stop processes for all given instances. Returns count stopped."""
         count = 0
