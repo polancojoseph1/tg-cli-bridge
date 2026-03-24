@@ -103,6 +103,16 @@ class RunnerBase(ABC):
             The assistant's response text.
         """
 
+    @staticmethod
+    def _format_query_response(text_parts: list[str], stderr_data: bytes, joiner: str = "") -> str:
+        """Format a generic stateless query response by combining text parts or returning stderr."""
+        if text_parts:
+            return joiner.join(text_parts)
+        err = stderr_data.decode(errors="replace").strip()
+        if err:
+            return f"[stderr] {err}"
+        return "(no response)"
+
     @abstractmethod
     async def run_query(self, prompt: str, timeout: int = 120) -> str:
         """Stateless one-shot query for automation (no session, no memory).

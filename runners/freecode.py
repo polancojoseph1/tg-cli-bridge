@@ -118,12 +118,7 @@ class FreeCodeBaseRunner(RunnerBase):
                 if err_msg:
                     return f"[error] {err_msg}"
 
-        if text_parts:
-            return "\n\n".join(text_parts)
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self._format_query_response(text_parts, stderr_data, joiner="\n\n")
 
     async def run(
         self,

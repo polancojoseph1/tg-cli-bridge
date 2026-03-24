@@ -101,13 +101,7 @@ class GeminiRunner(RunnerBase):
             except json.JSONDecodeError:
                 continue
 
-        if text_parts:
-            return "".join(text_parts)
-
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self._format_query_response(text_parts, stderr_data)
 
     async def run(
         self,
