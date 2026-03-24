@@ -23,13 +23,6 @@ class FreeCodeBaseRunner(RunnerBase):
     name = "freecode"
     cli_command = "freecode"
 
-    def __init__(self):
-        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
-        self.timeout = CLI_TIMEOUT
-        self.memory_dir = MEMORY_DIR
-        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
-        self.memory_enabled = MEMORY_ENABLED
-
     def discover_binary(self) -> str:
         """Use FREECODE_BIN_PATH if set, otherwise fall back to PATH lookup."""
         import shutil
@@ -51,19 +44,6 @@ class FreeCodeBaseRunner(RunnerBase):
         instance.session_started = False
         instance.session_cost = 0.0
 
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
-
     async def kill_all(self) -> int:
         return self._kill_processes("freecode run")
 
@@ -74,30 +54,14 @@ class FreeCodeBaseRunner(RunnerBase):
         except FileNotFoundError:
             return '{"error": "freecode CLI not found"}'
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), True)
         cmd = [binary, "run", "--format", "json", prompt]
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-        except OSError as exc:
-            return f'{{"error": "Failed to start freecode: {exc}"}}'
-
-        try:
-            stdout_data, stderr_data = await asyncio.wait_for(
-                proc.communicate(), timeout=float(timeout)
-            )
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            return '{"error": "timed out"}'
+        stdout_data, stderr_data, err_msg = await self._run_cmd_with_timeout(
+            cmd, float(timeout), env, "freecode"
+        )
+        if err_msg:
+            return err_msg
 
         # Parse NDJSON output — collect all text events
         text_parts = []
@@ -118,12 +82,7 @@ class FreeCodeBaseRunner(RunnerBase):
                 if err_msg:
                     return f"[error] {err_msg}"
 
-        if text_parts:
-            return "\n\n".join(text_parts)
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self.format_query_result(text_parts, None, stderr_data, join_char="\n\n")
 
     async def run(
         self,
@@ -143,7 +102,7 @@ class FreeCodeBaseRunner(RunnerBase):
         except FileNotFoundError:
             return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), user_is_owner)
         session_started = instance.session_started
 
         # Per-instance OpenRouter credentials (Bridge Cloud per-user keys)
@@ -159,7 +118,7 @@ class FreeCodeBaseRunner(RunnerBase):
         cmd = [binary, "run", "--format", "json"]
 
         # Custom fork: pass --steps if FREECODE_MAX_STEPS is set
-        max_steps = os.environ.get("FREECODE_MAX_STEPS")
+        max_steps = os.environ.get("FREECODE_MAX_STEPS") or os.environ.get("OPENCODE_MAX_STEPS")
         if max_steps:
             cmd += ["--steps", max_steps]
 
@@ -179,31 +138,7 @@ class FreeCodeBaseRunner(RunnerBase):
 
         # Build the prompt with system context prepended
         # (freecode doesn't have --append-system-prompt, so we prepend to the message)
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint
-                    + f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the edit or write tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context)
 
         # Build prompt
         if image_path:
@@ -340,17 +275,7 @@ class FreeCodeBaseRunner(RunnerBase):
 
             await proc.wait()
 
-        _KEEPALIVE_INTERVAL = 180  # seconds between "still working" pings
-
-        async def _keepalive():
-            """Send a periodic heartbeat when no progress has been sent for a while."""
-            while True:
-                await asyncio.sleep(30)
-                if on_progress and time.monotonic() - _last_progress_time[0] >= _KEEPALIVE_INTERVAL:
-                    _last_progress_time[0] = time.monotonic()
-                    await on_progress("\u23f3 Still working...")
-
-        _keepalive_task = asyncio.create_task(_keepalive())
+        _keepalive_task = self.start_keepalive_task(on_progress, _last_progress_time)
         try:
             await asyncio.wait_for(process_stream(), timeout=self.timeout)
         except asyncio.TimeoutError:
@@ -361,9 +286,7 @@ class FreeCodeBaseRunner(RunnerBase):
             except ProcessLookupError:
                 pass
             instance.process = None
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\u23f0 FreeCode took too long to respond (timed out)."
         finally:
             _keepalive_task.cancel()
@@ -372,9 +295,7 @@ class FreeCodeBaseRunner(RunnerBase):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
 
         if proc.returncode == 0:
@@ -384,9 +305,7 @@ class FreeCodeBaseRunner(RunnerBase):
             instance.last_input_tokens = _usage.get("input_tokens", 0)
             instance.last_output_tokens = _usage.get("output_tokens", 0)
             instance.session_cost += _usage.get("cost", 0.0)
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
 
         if proc.returncode != 0:
             logger.error("freecode exited %d (see log: %s)", proc.returncode, log_path)
@@ -395,9 +314,7 @@ class FreeCodeBaseRunner(RunnerBase):
                     _log_tail = _f.read()[-2000:]
             except OSError:
                 _log_tail = ""
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             _log_lower = _log_tail.lower()
             if "auth" in _log_lower or "unauthorized" in _log_lower:
                 return "\u274c FreeCode auth error. Check your API keys or run `freecode` to configure."
@@ -409,7 +326,7 @@ class FreeCodeBaseRunner(RunnerBase):
         # Corrupt session: tool call / response mismatch rejected by Mistral
         if _session_corrupt:
             self.new_session(instance)
-            return "\u26a0\ufe0f Session had corrupt tool call history (Mistral rejected it). Session has been reset \u2014 please resend your message."
+            return "\u26a0\ufe0f Session had corrupt tool call history. Session has been reset \u2014 please resend your message."
 
         if _pending_text:
             return _pending_text

@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import sys
 import uuid
 from typing import Callable, Awaitable
@@ -32,30 +31,14 @@ class ClaudeRunner(RunnerBase):
     cli_command = "claude"
 
     def __init__(self):
-        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, CHROME_ENABLED, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
-        self.timeout = CLI_TIMEOUT
-        self.memory_dir = MEMORY_DIR
-        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
+        super().__init__()
+        from config import CHROME_ENABLED
         self.chrome_enabled = CHROME_ENABLED
-        self.memory_enabled = MEMORY_ENABLED
 
     def new_session(self, instance) -> None:
         instance.session_id = str(uuid.uuid4())
         instance.session_started = False
         instance.session_cost = 0.0
-
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
 
     async def kill_all(self) -> int:
         return self._kill_processes("claude -p")
@@ -67,7 +50,7 @@ class ClaudeRunner(RunnerBase):
         except FileNotFoundError:
             return '{"error": "claude CLI not found"}'
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env = self.build_env({k: v for k, v in os.environ.items() if k != "CLAUDECODE"}, True)
         cmd = [
             binary, "-p", "--model", "claude-haiku-4-5-20251001",
             "--dangerously-skip-permissions",
@@ -85,54 +68,12 @@ class ClaudeRunner(RunnerBase):
         except OSError as exc:
             return f'{{"error": "Failed to start claude: {exc}"}}'
 
-        stdout_data = b""
-        stderr_data = b""
-
-        async def _read():
-            nonlocal stdout_data, stderr_data
-            stdout_data, stderr_data = await proc.communicate()
-
         try:
-            await asyncio.wait_for(_read(), timeout=float(timeout))
+            stdout_data, stderr_data = await RunnerBase.read_with_timeout(proc, float(timeout))
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
             return '{"error": "timed out"}'
 
-        result = stdout_data.decode(errors="replace").strip()
-        if result:
-            return result
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
-
-    # Env vars stripped from subprocess when running on behalf of a non-owner user
-    _SENSITIVE_ENV_PATTERNS = re.compile(
-        r"^(AWS_|GOOGLE_|GCP_|GCLOUD_|GITHUB_|GH_|GITLAB_|AZURE_|STRIPE_|"
-        r"TWILIO_|SENDGRID_|CLOUDFLARE_|DIGITALOCEAN_|HEROKU_|VERCEL_|NETLIFY_|"
-        r"OPENAI_|GEMINI_|COHERE_|MISTRAL_|TOGETHER_)",
-        re.IGNORECASE,
-    )
-    _SENSITIVE_ENV_EXACT = {
-        "SSH_AUTH_SOCK", "SSH_AGENT_PID",
-        "INTERNAL_API_KEY", "TELEGRAM_BOT_TOKEN", "COLLAB_TOKEN",
-        "ALLOWED_USER_ID", "ALLOWED_USER_IDS", "USER_NAMES",
-    }
-
-    def _build_env(self, user_is_owner: bool) -> dict:
-        """Build subprocess environment. Strip sensitive vars for non-owner users."""
-        base = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        if user_is_owner:
-            return base
-        return {
-            k: v for k, v in base.items()
-            if k not in self._SENSITIVE_ENV_EXACT
-            and not self._SENSITIVE_ENV_PATTERNS.match(k)
-        }
+        return self.format_query_result(None, stdout_data, stderr_data)
 
     async def run(
         self,
@@ -152,7 +93,7 @@ class ClaudeRunner(RunnerBase):
         except FileNotFoundError:
             return "\u274c Error: claude CLI not found. Is Claude Code installed?"
 
-        env = self._build_env(user_is_owner)
+        env = self.build_env({k: v for k, v in os.environ.items() if k != "CLAUDECODE"}, user_is_owner)
         session_id = instance.session_id
         session_started = instance.session_started
 
@@ -176,31 +117,7 @@ class ClaudeRunner(RunnerBase):
             cmd += ["--session-id", session_id]
 
         # Build combined system prompt
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint +
-                    f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the Edit or Write tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context, memory_tool_names="Edit or Write")
         if system_parts:
             cmd += ["--append-system-prompt", "\n\n".join(system_parts)]
 
@@ -360,9 +277,7 @@ class ClaudeRunner(RunnerBase):
             if str(_ce) == "plan_mode_detected":
                 await proc.wait()
                 instance.process = None
-                instance.subprocess_pid = 0
-                instance.subprocess_log_file = ""
-                instance.subprocess_start_time = ""
+                self._clear_subprocess_info(instance)
                 return "\u26a0\ufe0f Plan mode is not supported in this context \u2014 session reset. Please resend your request."
             raise
         except asyncio.TimeoutError:
@@ -372,9 +287,7 @@ class ClaudeRunner(RunnerBase):
             except ProcessLookupError:
                 pass
             instance.process = None
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             self.new_session(instance)  # reset session so next call doesn't hit "already in use"
             return "\u23f0 Claude took too long to respond (timed out)."
 
@@ -382,9 +295,7 @@ class ClaudeRunner(RunnerBase):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
 
         if (proc.returncode == 0 or _got_result) and not result_is_error:
@@ -399,9 +310,7 @@ class ClaudeRunner(RunnerBase):
                 instance.last_output_tokens = turn.get("output_tokens", 0)
             instance.session_cost += _usage["cost"]
             # Clear subprocess tracking — process finished cleanly
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
 
         if proc.returncode != 0 and not _got_result:
             logger.error("claude exited %d (see log: %s)", proc.returncode, log_path)
@@ -411,9 +320,7 @@ class ClaudeRunner(RunnerBase):
                     _log_tail = _f.read()[-2000:]
             except OSError:
                 _log_tail = ""
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             if _is_auth_error(_log_tail):
                 self.new_session(instance)
                 return "\u274c Claude auth expired. Run `claude` in a terminal on this Mac to sign in again, then resend your message."
@@ -424,9 +331,7 @@ class ClaudeRunner(RunnerBase):
 
         if result_is_error:
             lowered_result = final_result.lower()
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             if _is_auth_error(final_result):
                 self.new_session(instance)
                 return "\u274c Claude auth expired. Run `claude` in a terminal on this Mac to sign in again, then resend your message."

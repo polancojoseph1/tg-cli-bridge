@@ -153,7 +153,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
         except FileNotFoundError:
             return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), user_is_owner)
         session_started = instance.session_started
 
         model = getattr(instance, "model", None) or os.environ.get("FREECODE_MODEL", "")
@@ -171,31 +171,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
             cmd += ["--session", instance.session_id]
 
         # Build system prompt
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint
-                    + f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the edit or write tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context)
 
         if image_path:
             prompt = (
@@ -319,16 +295,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
 
             await proc.wait()
 
-        _KEEPALIVE_INTERVAL = 180
-
-        async def _keepalive():
-            while True:
-                await asyncio.sleep(30)
-                if on_progress and time.monotonic() - _last_progress_time[0] >= _KEEPALIVE_INTERVAL:
-                    _last_progress_time[0] = time.monotonic()
-                    await on_progress("\u23f3 Still working...")
-
-        _keepalive_task = asyncio.create_task(_keepalive())
+        _keepalive_task = self.start_keepalive_task(on_progress, _last_progress_time)
         try:
             await asyncio.wait_for(process_stream(), timeout=self.timeout)
         except asyncio.TimeoutError:
@@ -339,9 +306,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
             except ProcessLookupError:
                 pass
             instance.process = None
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\u23f0 FreeCode took too long to respond (timed out)."
         finally:
             _keepalive_task.cancel()
@@ -350,9 +315,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
 
         if proc.returncode == 0:
@@ -362,9 +325,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
             instance.last_input_tokens = _usage.get("input_tokens", 0)
             instance.last_output_tokens = _usage.get("output_tokens", 0)
             instance.session_cost += _usage.get("cost", 0.0)
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
 
         if proc.returncode != 0:
             logger.error("freecode exited %d (see log: %s)", proc.returncode, log_path)
@@ -373,9 +334,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
                     _log_tail = _f.read()[-2000:]
             except OSError:
                 _log_tail = ""
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             _log_lower = _log_tail.lower()
             if "auth" in _log_lower or "unauthorized" in _log_lower:
                 return "\u274c FreeCode auth error. Check your API keys or run `freecode` to configure."

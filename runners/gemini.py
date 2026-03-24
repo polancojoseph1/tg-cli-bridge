@@ -22,29 +22,9 @@ class GeminiRunner(RunnerBase):
     name = "gemini"
     cli_command = "gemini"
 
-    def __init__(self):
-        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
-        self.timeout = CLI_TIMEOUT
-        self.memory_dir = MEMORY_DIR
-        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
-        self.memory_enabled = MEMORY_ENABLED
-
     def new_session(self, instance) -> None:
         instance.session_started = False
         instance.session_id = None
-
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
 
     async def kill_all(self) -> int:
         return self._kill_processes("gemini -p")
@@ -56,7 +36,7 @@ class GeminiRunner(RunnerBase):
         except FileNotFoundError:
             return '{"error": "gemini CLI not found"}'
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), True)
         cmd = [binary, "--yolo", "--output-format", "stream-json", "-p", prompt]
 
         try:
@@ -69,21 +49,9 @@ class GeminiRunner(RunnerBase):
         except OSError as exc:
             return f'{{"error": "Failed to start gemini: {exc}"}}'
 
-        stdout_data = b""
-        stderr_data = b""
-
-        async def _read():
-            nonlocal stdout_data, stderr_data
-            stdout_data, stderr_data = await proc.communicate()
-
         try:
-            await asyncio.wait_for(_read(), timeout=float(timeout))
+            stdout_data, stderr_data = await RunnerBase.read_with_timeout(proc, float(timeout))
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
             return '{"error": "timed out"}'
 
         # Parse stream-json output for text
@@ -101,13 +69,7 @@ class GeminiRunner(RunnerBase):
             except json.JSONDecodeError:
                 continue
 
-        if text_parts:
-            return "".join(text_parts)
-
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self.format_query_result(text_parts, None, stderr_data)
 
     async def run(
         self,
@@ -130,35 +92,11 @@ class GeminiRunner(RunnerBase):
         except FileNotFoundError:
             return "\u274c Error: gemini CLI not found. Is Gemini CLI installed?"
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), user_is_owner)
         system_prompt_file = None
 
         # Build system prompt
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint +
-                    f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the edit_file or write_new_file tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context, memory_tool_names="edit_file or write_new_file")
 
         if system_parts:
             system_prompt_file = tempfile.NamedTemporaryFile(
@@ -268,9 +206,7 @@ class GeminiRunner(RunnerBase):
             except ProcessLookupError:
                 pass
             instance.process = None
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\u23f0 Gemini took too long to respond (timed out)."
         finally:
             if system_prompt_file:
@@ -283,9 +219,7 @@ class GeminiRunner(RunnerBase):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
 
         if proc.returncode == 0:
@@ -297,9 +231,7 @@ class GeminiRunner(RunnerBase):
                 instance.last_output_tokens = _usage["output"]
                 instance.last_total_tokens = _usage["total"]
             # Clear subprocess tracking — process finished cleanly
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
 
         if proc.returncode != 0:
             logger.error("gemini exited %d (see log: %s)", proc.returncode, log_path)
@@ -309,9 +241,7 @@ class GeminiRunner(RunnerBase):
                     _log_tail = _f.read()[-2000:]
             except OSError:
                 _log_tail = ""
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             _log_lower = _log_tail.lower()
             if any(ind in _log_lower for ind in [
                 "terminalquotaerror", "resource_exhausted", "quota", "429", "too many requests"
