@@ -3024,7 +3024,8 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             if not rows:
                 await send_message(chat_id, "No pending access requests.")
             else:
-                lines = ["<b>Pending requests:</b>"]
+                await send_message(chat_id, "<b>Pending requests:</b>", parse_mode="HTML")
+                coroutines = []
                 for r in rows:
                     display = r["first_name"] or ""
                     if r["username"]:
@@ -3034,11 +3035,12 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                         {"text": "✅ Approve", "callback_data": f"approve_user:{r['user_id']}"},
                         {"text": "❌ Deny",    "callback_data": f"deny_user:{r['user_id']}"},
                     ]]
-                    await send_inline_keyboard(
+                    coroutines.append(send_inline_keyboard(
                         chat_id,
                         f"<b>{display}</b> (ID: <code>{r['user_id']}</code>)",
                         buttons,
-                    )
+                    ))
+                await asyncio.gather(*coroutines)
 
         else:
             await send_message(
