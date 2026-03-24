@@ -176,3 +176,29 @@ def test_create_agent_duplicate_id_raises_value_error(clean_registry):
     # Creating again with the same ID should fail
     with pytest.raises(ValueError, match=f"Agent '{agent_id}' already exists"):
         create_agent(agent_id=agent_id, name="Another Name")
+
+
+# --- delete_agent tests ---
+
+def test_delete_agent(clean_registry):
+    """Test deleting an agent successfully and failing when agent does not exist."""
+    agent_id = "test_agent_del"
+    agent_registry.create_agent(
+        agent_id=agent_id,
+        name="Test Agent",
+        agent_type="custom",
+        system_prompt="You are a test agent."
+    )
+    assert agent_registry.get_agent(agent_id) is not None
+
+    # Delete the agent
+    result = agent_registry.delete_agent(agent_id)
+    assert result is True
+    assert agent_registry.get_agent(agent_id) is None
+
+    # Delete the same agent again should return False
+    result_second = agent_registry.delete_agent(agent_id)
+    assert result_second is False
+
+    # Delete a completely non-existent agent
+    assert agent_registry.delete_agent("non_existent_agent") is False
