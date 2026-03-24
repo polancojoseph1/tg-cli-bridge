@@ -66,7 +66,7 @@ async def _call_providers(
     """Try providers in order, rotate on 429/error. Returns Chat Completions response or None."""
     providers = _get_providers()
     client = _get_client()
-    timeout = int(os.environ.get("CLI_TIMEOUT", "120"))
+    timeout = int(os.environ.get("CLI_TIMEOUT", "86400"))
     provider_timeout = int(os.environ.get("FREE_PROXY_PROVIDER_TIMEOUT", "30"))
     deadline = time.time() + timeout
     max_tokens = max_tokens or int(os.environ.get("FREE_MAX_TOKENS", "4096"))
