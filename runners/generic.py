@@ -19,26 +19,13 @@ class GenericRunner(RunnerBase):
     name = "generic"
 
     def __init__(self):
-        from config import CLI_COMMAND, CLI_TIMEOUT
+        super().__init__()
+        from config import CLI_COMMAND
         self.cli_command = CLI_COMMAND
-        self.timeout = CLI_TIMEOUT
 
     def new_session(self, instance) -> None:
         """Generic runner has no session state — nothing to reset."""
         instance.session_started = False
-
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
 
     async def kill_all(self) -> int:
         return self._kill_processes(self.cli_command)
