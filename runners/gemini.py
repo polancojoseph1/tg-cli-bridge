@@ -22,29 +22,9 @@ class GeminiRunner(RunnerBase):
     name = "gemini"
     cli_command = "gemini"
 
-    def __init__(self):
-        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
-        self.timeout = CLI_TIMEOUT
-        self.memory_dir = MEMORY_DIR
-        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
-        self.memory_enabled = MEMORY_ENABLED
-
     def new_session(self, instance) -> None:
         instance.session_started = False
         instance.session_id = None
-
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
 
     async def kill_all(self) -> int:
         return self._kill_processes("gemini -p")
@@ -69,21 +49,9 @@ class GeminiRunner(RunnerBase):
         except OSError as exc:
             return f'{{"error": "Failed to start gemini: {exc}"}}'
 
-        stdout_data = b""
-        stderr_data = b""
-
-        async def _read():
-            nonlocal stdout_data, stderr_data
-            stdout_data, stderr_data = await proc.communicate()
-
         try:
-            await asyncio.wait_for(_read(), timeout=float(timeout))
+            stdout_data, stderr_data = await RunnerBase.read_with_timeout(proc, float(timeout))
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
             return '{"error": "timed out"}'
 
         # Parse stream-json output for text
@@ -101,13 +69,7 @@ class GeminiRunner(RunnerBase):
             except json.JSONDecodeError:
                 continue
 
-        if text_parts:
-            return "".join(text_parts)
-
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self.format_query_result(text_parts, None, stderr_data)
 
     async def run(
         self,
@@ -268,9 +230,7 @@ class GeminiRunner(RunnerBase):
             except ProcessLookupError:
                 pass
             instance.process = None
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\u23f0 Gemini took too long to respond (timed out)."
         finally:
             if system_prompt_file:
@@ -283,9 +243,7 @@ class GeminiRunner(RunnerBase):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
 
         if proc.returncode == 0:
@@ -297,9 +255,7 @@ class GeminiRunner(RunnerBase):
                 instance.last_output_tokens = _usage["output"]
                 instance.last_total_tokens = _usage["total"]
             # Clear subprocess tracking — process finished cleanly
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
 
         if proc.returncode != 0:
             logger.error("gemini exited %d (see log: %s)", proc.returncode, log_path)
@@ -309,9 +265,7 @@ class GeminiRunner(RunnerBase):
                     _log_tail = _f.read()[-2000:]
             except OSError:
                 _log_tail = ""
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             _log_lower = _log_tail.lower()
             if any(ind in _log_lower for ind in [
                 "terminalquotaerror", "resource_exhausted", "quota", "429", "too many requests"
