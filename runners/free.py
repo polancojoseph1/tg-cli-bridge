@@ -153,7 +153,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
         except FileNotFoundError:
             return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), user_is_owner)
         session_started = instance.session_started
 
         model = getattr(instance, "model", None) or os.environ.get("FREECODE_MODEL", "")
