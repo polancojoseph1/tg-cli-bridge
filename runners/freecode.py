@@ -77,27 +77,11 @@ class FreeCodeBaseRunner(RunnerBase):
         env = dict(os.environ)
         cmd = [binary, "run", "--format", "json", prompt]
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-        except OSError as exc:
-            return f'{{"error": "Failed to start freecode: {exc}"}}'
-
-        try:
-            stdout_data, stderr_data = await asyncio.wait_for(
-                proc.communicate(), timeout=float(timeout)
-            )
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            return '{"error": "timed out"}'
+        stdout_data, stderr_data, err_msg = await self._run_cmd_with_timeout(
+            cmd, float(timeout), env, "freecode"
+        )
+        if err_msg:
+            return err_msg
 
         # Parse NDJSON output — collect all text events
         text_parts = []

@@ -115,6 +115,37 @@ class RunnerBase(ABC):
             The response text.
         """
 
+    @staticmethod
+    async def _run_cmd_with_timeout(
+        cmd: list[str],
+        timeout: float,
+        env: dict | None = None,
+        cli_name: str = "cli",
+    ) -> tuple[bytes | None, bytes | None, str | None]:
+        """Run a subprocess command with timeout and return (stdout, stderr, error_msg)."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+        except OSError as exc:
+            return None, None, f'{{"error": "Failed to start {cli_name}: {exc}"}}'
+
+        try:
+            stdout_data, stderr_data = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+            return stdout_data, stderr_data, None
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            return None, None, '{"error": "timed out"}'
+
     @abstractmethod
     async def stop(self, instance: Any) -> bool:
         """Stop the running process for a specific instance.
