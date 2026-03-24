@@ -12,9 +12,8 @@ import os
 import sys
 import shutil
 import webbrowser
-import threading
-import time
 from pathlib import Path
+import asyncio
 
 # ---------------------------------------------------------------------------
 # Auto-activate venv
@@ -1933,8 +1932,6 @@ boot();
 # ---------------------------------------------------------------------------
 # Server start
 # ---------------------------------------------------------------------------
-
-import asyncio
 
 @app.on_event("startup")
 async def open_browser():
