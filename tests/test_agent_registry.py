@@ -8,6 +8,13 @@ os.environ.setdefault("ALLOWED_USER_ID", "12345678")
 os.environ.setdefault("CLI_RUNNER", "generic")
 
 import agent_registry
+from agent_registry import (
+    create_agent,
+    get_agent,
+    AgentDefinition,
+    DEFAULT_AGENT_MODEL,
+)
+
 
 @pytest.fixture
 def clean_registry(tmp_path):
@@ -17,6 +24,9 @@ def clean_registry(tmp_path):
         # The first time _get_conn is called in each test, it will connect
         # to this new temp db and run the _SCHEMA creation automatically.
         yield db_path
+
+
+# --- resolve_agent tests ---
 
 def test_resolve_agent_exact_id(clean_registry):
     agent_registry.create_agent(agent_id="test_agent_1", name="Alpha Bot")
@@ -78,3 +88,91 @@ def test_resolve_agent_case_insensitive_id(clean_registry):
     resolved = agent_registry.resolve_agent("test_id")
     assert resolved is not None
     assert resolved.id == "TEST_ID"
+
+
+# --- create_agent tests ---
+
+def test_create_agent_happy_path(clean_registry):
+    """Test creating an agent with all fields provided."""
+    agent_id = "test_agent_1"
+    name = "Test Agent 1"
+    agent_type = "research"
+    system_prompt = "You are a test researcher."
+    skills = ["skill_1", "skill_2"]
+    model = "test-model-v1"
+    collaborators = ["collab_1"]
+
+    agent = create_agent(
+        agent_id=agent_id,
+        name=name,
+        agent_type=agent_type,
+        system_prompt=system_prompt,
+        skills=skills,
+        model=model,
+        collaborators=collaborators,
+    )
+
+    assert isinstance(agent, AgentDefinition)
+    assert agent.id == agent_id
+    assert agent.name == name
+    assert agent.agent_type == agent_type
+    assert agent.system_prompt == system_prompt
+    assert agent.skills == skills
+    assert agent.model == model
+    assert agent.collaborators == collaborators
+    assert agent.created_at > 0
+    assert agent.updated_at == agent.created_at
+
+    # Verify it was persisted to the database
+    db_agent = get_agent(agent_id)
+    assert db_agent is not None
+    assert db_agent.id == agent_id
+    assert db_agent.name == name
+    assert db_agent.agent_type == agent_type
+    assert db_agent.system_prompt == system_prompt
+    assert db_agent.skills == skills
+    assert db_agent.model == model
+    assert db_agent.collaborators == collaborators
+
+
+def test_create_agent_defaults(clean_registry):
+    """Test creating an agent with minimal fields to check defaults."""
+    agent_id = "test_agent_2"
+    name = "Test Agent 2"
+
+    agent = create_agent(
+        agent_id=agent_id,
+        name=name,
+    )
+
+    assert agent.id == agent_id
+    assert agent.name == name
+    assert agent.agent_type == "custom"
+    assert agent.system_prompt == ""
+    assert agent.skills == []
+    assert agent.model == DEFAULT_AGENT_MODEL
+    assert agent.collaborators == []
+
+    # Verify it was persisted to the database
+    db_agent = get_agent(agent_id)
+    assert db_agent is not None
+    assert db_agent.id == agent_id
+    assert db_agent.name == name
+    assert db_agent.agent_type == "custom"
+    assert db_agent.system_prompt == ""
+    assert db_agent.skills == []
+    assert db_agent.model == DEFAULT_AGENT_MODEL
+    assert db_agent.collaborators == []
+
+
+def test_create_agent_duplicate_id_raises_value_error(clean_registry):
+    """Test creating an agent with an ID that already exists raises a ValueError."""
+    agent_id = "test_agent_3"
+    name = "Test Agent 3"
+
+    # Create the first time should succeed
+    create_agent(agent_id=agent_id, name=name)
+
+    # Creating again with the same ID should fail
+    with pytest.raises(ValueError, match=f"Agent '{agent_id}' already exists"):
+        create_agent(agent_id=agent_id, name="Another Name")
