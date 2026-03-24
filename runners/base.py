@@ -241,6 +241,25 @@ class RunnerBase(ABC):
         finally:
             f.close()
 
+    @staticmethod
+    def format_query_result(
+        text_parts: list[str] | None,
+        stdout_data: bytes | None,
+        stderr_data: bytes,
+        join_char: str = "",
+    ) -> str:
+        """Format the final result string from a run_query CLI response."""
+        if text_parts:
+            return join_char.join(text_parts)
+        if stdout_data:
+            result = stdout_data.decode(errors="replace").strip()
+            if result:
+                return result
+        err = stderr_data.decode(errors="replace").strip()
+        if err:
+            return f"[stderr] {err}"
+        return "(no response)"
+
     def format_tool_progress(self, name: str, params: dict) -> str:
         """Format a tool call into a human-readable progress string.
 

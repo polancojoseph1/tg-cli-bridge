@@ -108,13 +108,7 @@ class CodexRunner(RunnerBase):
             except json.JSONDecodeError:
                 continue
 
-        if text_parts:
-            return "".join(text_parts)
-
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self.format_query_result(text_parts, None, stderr_data)
 
     def _format_codex_progress(self, item: dict) -> str:
         """Format a codex JSONL item into a progress string."""

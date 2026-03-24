@@ -83,13 +83,7 @@ class QwenRunner(RunnerBase):
                 pass
             return '{"error": "timed out"}'
 
-        result = stdout_data.decode(errors="replace").strip()
-        if result:
-            return result
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self.format_query_result(None, stdout_data, stderr_data)
 
     async def run(
         self,
