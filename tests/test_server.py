@@ -15,11 +15,11 @@ os.environ.setdefault("ENV_FILE", "/dev/null")
 import json
 import hashlib
 import hmac
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 
 from fastapi.testclient import TestClient
 
-import server
+
 from server import app
 
 client = TestClient(app)
@@ -120,10 +120,8 @@ def test_trigger_webhook_branch_filter_mismatch():
         assert response.json() == {"ok": True, "skipped": "branch 'feature' != 'main'"}
 
 
-import pytest
 
-@pytest.mark.asyncio
-async def test_trigger_webhook_success_no_filters():
+def test_trigger_webhook_success_no_filters():
     secret = "a" * 32
     mock_trigger = MockTrigger(config={"secret": secret})
     payload = b'{"data": "test"}'
@@ -143,8 +141,7 @@ async def test_trigger_webhook_success_no_filters():
         assert response.json() == {"ok": True}
         mock_fire.assert_awaited_once_with("test_trigger")
 
-@pytest.mark.asyncio
-async def test_trigger_webhook_success_with_filters():
+def test_trigger_webhook_success_with_filters():
     secret = "a" * 32
     mock_trigger = MockTrigger(config={"secret": secret, "event": "push", "branch": "main"})
     payload = json.dumps({"ref": "refs/heads/main"}).encode()
