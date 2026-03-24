@@ -102,13 +102,7 @@ class ClaudeRunner(RunnerBase):
                 pass
             return '{"error": "timed out"}'
 
-        result = stdout_data.decode(errors="replace").strip()
-        if result:
-            return result
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            return f"[stderr] {err}"
-        return "(no response)"
+        return self.decode_cli_output(stdout_data, stderr_data)
 
     # Env vars stripped from subprocess when running on behalf of a non-owner user
     _SENSITIVE_ENV_PATTERNS = re.compile(

@@ -74,16 +74,13 @@ class GenericRunner(RunnerBase):
                 pass
             return '{"error": "timed out"}'
 
-        result = stdout_data.decode(errors="replace").strip()
-        if result:
-            return result
-        err = stderr_data.decode(errors="replace").strip()
-        if err:
-            # Strip ANSI escape codes and control characters before returning
-            err = re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', err)
-            err = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', err)
-            return f"[error] {err[:500]}"
-        return "(no response)"
+        return self.decode_cli_output(
+            stdout_data,
+            stderr_data,
+            err_prefix="[error] ",
+            strip_ansi=True,
+            max_err_len=500,
+        )
 
     async def run(
         self,

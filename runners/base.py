@@ -143,6 +143,23 @@ class RunnerBase(ABC):
         return 0
 
     @staticmethod
+    def decode_cli_output(stdout_data: bytes, stderr_data: bytes, err_prefix: str = "[stderr] ", strip_ansi: bool = False, max_err_len: int = 0) -> str:
+        """Decode stdout and stderr from a CLI process into a single response string."""
+        result = stdout_data.decode(errors="replace").strip()
+        if result:
+            return result
+        err = stderr_data.decode(errors="replace").strip()
+        if err:
+            if strip_ansi:
+                import re
+                err = re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', err)
+                err = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', err)
+            if max_err_len > 0:
+                err = err[:max_err_len]
+            return f"{err_prefix}{err}"
+        return "(no response)"
+
+    @staticmethod
     def _kill_processes(pattern: str) -> int:
         """Kill processes matching pattern. Cross-platform (Windows + Unix).
 
