@@ -1,6 +1,5 @@
 """Tests for config.py — runs without any real credentials."""
 import os
-import pytest
 
 
 def _set_minimal_env(**overrides):

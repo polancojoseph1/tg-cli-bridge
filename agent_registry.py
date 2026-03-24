@@ -22,7 +22,7 @@ from pathlib import Path
 
 logger = logging.getLogger("bridge.agent_registry")
 
-from config import MEMORY_DIR, DEFAULT_AGENT_MODEL
+from config import MEMORY_DIR, DEFAULT_AGENT_MODEL  # noqa: E402
 AGENTS_DB = str(Path(MEMORY_DIR) / "agents.db")
 
 _SCHEMA = """

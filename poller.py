@@ -19,7 +19,6 @@ import sqlite3
 import subprocess
 import time
 import urllib.request
-from pathlib import Path
 
 # ── Config ───────────────────────────────────────────────────────────────────
 POLL_INTERVAL  = 5    # seconds between polls

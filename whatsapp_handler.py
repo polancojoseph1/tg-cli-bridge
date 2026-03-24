@@ -14,7 +14,6 @@ import asyncio
 import hashlib
 import logging
 import os
-import tempfile
 import httpx
 
 logger = logging.getLogger("bridge.whatsapp")
@@ -137,7 +136,7 @@ async def send_photo(chat_id: int, photo_path: str, caption: str | None = None) 
 
 async def send_video(chat_id: int, video_path: str, caption: str | None = None) -> bool:
     """WhatsApp video requires re-encoding; just send a text notice for now."""
-    msg = f"📹 (video generated)" + (f"\n{caption}" if caption else "")
+    msg = "📹 (video generated)" + (f"\n{caption}" if caption else "")
     result = await send_message(chat_id, msg)
     return result is not None
 

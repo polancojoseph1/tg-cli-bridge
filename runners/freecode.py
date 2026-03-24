@@ -12,7 +12,6 @@ import logging
 import os
 import sys
 import time
-import uuid
 from typing import Callable, Awaitable
 
 from runners.base import RunnerBase, _SUBPROCESS_LOGGER
@@ -36,7 +35,6 @@ class FreeCodeBaseRunner(RunnerBase):
         import shutil
         custom = os.environ.get("FREECODE_BIN_PATH")
         if custom:
-            import stat as _stat
             expanded = os.path.expanduser(custom)
             if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
                 return expanded
@@ -132,7 +130,7 @@ class FreeCodeBaseRunner(RunnerBase):
         message: str,
         instance,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,
@@ -148,6 +146,13 @@ class FreeCodeBaseRunner(RunnerBase):
         env = dict(os.environ)
         session_started = instance.session_started
 
+        # Per-instance OpenRouter credentials (Bridge Cloud per-user keys)
+        bc_or_key = getattr(instance, "bc_openrouter_key", None)
+        if bc_or_key:
+            # Freecode's openrouter provider reads OPENROUTER_API_KEY (not OPENAI_*)
+            env["OPENROUTER_API_KEY"] = bc_or_key
+            logger.debug("[freecode] Using per-instance OpenRouter key for Bridge Cloud")
+
         # Determine model — instance.model or env override
         model = getattr(instance, "model", None) or os.environ.get("FREECODE_MODEL", "")
 
@@ -159,7 +164,14 @@ class FreeCodeBaseRunner(RunnerBase):
             cmd += ["--steps", max_steps]
 
         if model:
-            cmd += ["-m", model]
+            # Freecode uses "providerID/modelID" format. OpenRouter models from v1_api.py
+            # are "org/model" style — must be prefixed with "openrouter/" so freecode
+            # routes them through the openrouter provider, not a non-existent org provider.
+            if bc_or_key and not model.startswith("openrouter/"):
+                fc_model = f"openrouter/{model}"
+            else:
+                fc_model = model
+            cmd += ["-m", fc_model]
 
         # Session continuity
         if session_started and instance.session_id:
@@ -235,7 +247,7 @@ class FreeCodeBaseRunner(RunnerBase):
         if on_subprocess_started:
             on_subprocess_started(proc.pid, log_path, instance.subprocess_start_time)
 
-        final_text_parts: list[str] = []
+        final_text_parts: list[str] = []  # noqa: F841
         _pending_text: str = ""
         _usage: dict = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
         _captured_session_id: str = ""
@@ -322,6 +334,9 @@ class FreeCodeBaseRunner(RunnerBase):
                         _session_corrupt = True
                     elif on_progress:
                         await on_progress(f"\u274c {err_name}: {err_msg[:200]}")
+                    else:
+                        # No progress callback (Bridge Cloud path) — surface error as response
+                        _pending_text = f"\u274c {err_name}: {err_msg[:200]}"
 
             await proc.wait()
 
@@ -425,19 +440,19 @@ class FreeCodeBaseRunner(RunnerBase):
             return f"\u270f\ufe0f Edit: {path}" if path else f"\u270f\ufe0f {title or tool_name}"
         elif name_lower in ("read", "read_file"):
             path = _get("filePath", "file_path", "path")
-            return f"\U0001f4c4 Read: {path}"  if path else f"\U0001f4c4 Read"
+            return f"\U0001f4c4 Read: {path}"  if path else "\U0001f4c4 Read"
         elif name_lower in ("list_directory", "ls", "glob"):
             target = _get("pattern", "dirPath", "dir_path", "path")
-            return f"\U0001f4c2 Glob: {target}" if target else f"\U0001f4c2 List"
+            return f"\U0001f4c2 Glob: {target}" if target else "\U0001f4c2 List"
         elif name_lower in ("grep", "grep_search", "search"):
             query = _get("query", "pattern", "regex")
-            return f"\U0001f50d Grep: {query[:80]}" if query else f"\U0001f50d Search"
+            return f"\U0001f50d Grep: {query[:80]}" if query else "\U0001f50d Search"
         elif name_lower in ("web_fetch", "fetch"):
             url = _get("url")
-            return f"\U0001f310 Fetch: {url}" if url else f"\U0001f310 Fetch"
+            return f"\U0001f310 Fetch: {url}" if url else "\U0001f310 Fetch"
         elif name_lower in ("web_search", "google_web_search"):
             query = _get("query", "search_query")
-            return f"\U0001f50e Search: {query}" if query else f"\U0001f50e Web search"
+            return f"\U0001f50e Search: {query}" if query else "\U0001f50e Web search"
         elif name_lower in ("question", "ask", "ask_followup_question", "ask_user"):
             return ""  # interactive question — not useful as progress
         elif tool_name:

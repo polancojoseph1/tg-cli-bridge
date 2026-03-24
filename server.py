@@ -7,13 +7,14 @@ import re
 import sys
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Request, Header
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles as _StaticFiles
 from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -39,13 +40,11 @@ except ImportError:
 from voice_handler import download_voice, transcribe_audio, text_to_speech, cleanup_file
 import memory_handler
 import display_prefs
-import task_handler
 import daily_report
 from instance_manager import InstanceManager, Instance
 import router
 import agent_manager
-from agent_registry import create_agent, resolve_agent, list_agents, update_agent, delete_agent, get_agent, create_skill, get_skill, list_skills_db, update_skill, delete_skill
-from agent_skills import SKILL_PACKS, list_skills
+from agent_registry import resolve_agent, get_agent
 
 # Optional modules (graceful degradation if not present)
 try:
@@ -108,7 +107,7 @@ PROMPTS = {}
 instances = InstanceManager()
 
 # -- Session store (crash recovery) ------------------------------------------
-import session_store as _ss_mod
+import session_store as _ss_mod  # noqa: E402
 _session_store = _ss_mod.SessionStore()
 _SHUTDOWN_FLAG = os.path.join(os.path.expanduser(os.environ.get("TG_BRIDGE_DATA_DIR", "~/.bridgebot")), "pids", f"{CLI_RUNNER}.shutdown_clean")
 
@@ -130,10 +129,102 @@ class QueuedMessage:
     voice_reply: bool = False
     instance_id: int = 0  # 0 = use active instance
     user_id: int = 0
+    extra_file_ids: list = field(default_factory=list)  # additional photos (album grouping)
 
 
 _processed_updates: set[int] = set()
 _voice_reply_mode: bool = False  # Toggle: reply with voice to text messages too
+
+# -- Media-group buffer and per-chat debounce ---------------------------------
+# Telegram sends album photos as separate updates sharing a media_group_id.
+# We buffer them for _MG_WAIT seconds then merge into one request.
+# We also debounce regular messages for _DEBOUNCE seconds so that a text
+# sent a moment before/after a photo gets merged into one call.
+_mg_buffer: dict = {}        # media_group_id -> [QueuedMessage, ...]
+_mg_timers: dict = {}        # media_group_id -> asyncio.TimerHandle
+_chat_debounce: dict = {}    # chat_id -> [QueuedMessage, ...]
+_chat_timers: dict = {}      # chat_id -> asyncio.TimerHandle
+_MG_WAIT  = 0.8              # seconds to collect album frames
+_DEBOUNCE = 0.4              # seconds to group text+photo sent in quick succession
+
+
+def _flush_mg(mg_id: str) -> None:
+    """Merge all buffered album photos and enqueue as one message."""
+    items = _mg_buffer.pop(mg_id, [])
+    _mg_timers.pop(mg_id, None)
+    if not items:
+        return
+    primary = items[0]
+    extra = [i.file_id for i in items[1:] if i.file_id]
+    caption = next((i.text for i in items if i.text), "")
+    merged = QueuedMessage(
+        chat_id=primary.chat_id,
+        msg_type=MessageType.PHOTO,
+        text=caption,
+        file_id=primary.file_id,
+        extra_file_ids=extra,
+        instance_id=primary.instance_id,
+        user_id=primary.user_id,
+    )
+    asyncio.create_task(_enqueue_message(merged))
+
+
+def _flush_chat(chat_id: int) -> None:
+    """Merge debounced items for a chat into one combined message."""
+    items = _chat_debounce.pop(chat_id, [])
+    _chat_timers.pop(chat_id, None)
+    if not items:
+        return
+    if len(items) == 1:
+        asyncio.create_task(_enqueue_message(items[0]))
+        return
+    photos = [i for i in items if i.msg_type == MessageType.PHOTO]
+    texts  = [i.text for i in items if i.text]
+    combined_text = "\n".join(texts)
+    if photos:
+        primary = photos[0]
+        extra = [i.file_id for i in photos[1:] if i.file_id]
+        merged = QueuedMessage(
+            chat_id=primary.chat_id,
+            msg_type=MessageType.PHOTO,
+            text=combined_text,
+            file_id=primary.file_id,
+            extra_file_ids=extra,
+            instance_id=primary.instance_id,
+            user_id=primary.user_id,
+        )
+    else:
+        first = items[0]
+        merged = QueuedMessage(
+            chat_id=first.chat_id,
+            msg_type=MessageType.TEXT,
+            text=combined_text,
+            voice_reply=first.voice_reply,
+            instance_id=first.instance_id,
+            user_id=first.user_id,
+        )
+    asyncio.create_task(_enqueue_message(merged))
+
+
+def _buffer_for_mg(item: QueuedMessage, mg_id: str) -> None:
+    """Buffer a media-group photo; flush after _MG_WAIT seconds of silence."""
+    handle = _mg_timers.get(mg_id)
+    if handle:
+        handle.cancel()
+    _mg_buffer.setdefault(mg_id, []).append(item)
+    loop = asyncio.get_event_loop()
+    _mg_timers[mg_id] = loop.call_later(_MG_WAIT, _flush_mg, mg_id)
+
+
+def _buffer_for_chat(item: QueuedMessage) -> None:
+    """Debounce item; if another arrives within _DEBOUNCE seconds, merge them."""
+    chat_id = item.chat_id
+    handle = _chat_timers.get(chat_id)
+    if handle:
+        handle.cancel()
+    _chat_debounce.setdefault(chat_id, []).append(item)
+    loop = asyncio.get_event_loop()
+    _chat_timers[chat_id] = loop.call_later(_DEBOUNCE, _flush_chat, chat_id)
 
 
 # -- Per-instance queue workers ----------------------------------------------
@@ -166,7 +257,7 @@ async def _instance_queue_worker(inst: Instance) -> None:
             if item.msg_type == MessageType.TEXT:
                 coro = _process_message(item.chat_id, item.text, voice_reply=item.voice_reply, instance=inst, user_id=item.user_id)
             elif item.msg_type == MessageType.PHOTO:
-                coro = _process_photo_message(item.chat_id, item.file_id, item.text, instance=inst, user_id=item.user_id)
+                coro = _process_photo_message(item.chat_id, item.file_id, item.text, instance=inst, user_id=item.user_id, extra_file_ids=item.extra_file_ids)
             elif item.msg_type == MessageType.VOICE:
                 coro = _process_voice_message(item.chat_id, item.file_id, item.text, instance=inst, user_id=item.user_id)
             elif item.msg_type == MessageType.IMAGE_GEN:
@@ -535,7 +626,13 @@ async def lifespan(application: FastAPI):
     errors = validate_config()
     for err in errors:
         logger.warning("Config issue: %s", err)
-    if is_cli_available():
+    if CLI_RUNNER == "router":
+        from runners.cli_router import CLIRouterRunner
+        if isinstance(runner, CLIRouterRunner) and runner.runner_names:
+            logger.info("Router mode — available CLIs: %s", ", ".join(runner.runner_names))
+        else:
+            logger.warning("Router mode — no CLIs available, commands will fail")
+    elif is_cli_available():
         logger.info("claude CLI found in PATH")
     else:
         logger.warning("claude CLI NOT found in PATH -- commands will fail")
@@ -554,29 +651,29 @@ async def lifespan(application: FastAPI):
         # Core
         ("help",      "Show available commands"),
         ("status",    "Show server status & queue depth"),
-        
+
         # Session Management
         ("new",       "Reset conversation & start fresh"),
         ("stop",      "Stop current task & clear queue"),
         ("kill",      "Force-kill all AI processes"),
-        
+
         # Instances (Multi-session)
         ("inst",      "Manage instances: new/list/switch/rename/end"),
-        
+
         # Agents
         ("agent",     "Manage specialist agents: list/create/talk/fix/feedback"),
         ("orch",      "Break task into parallel agents, synthesize results"),
-        
+
         # Scheduling
         ("schedule",   "Schedule a recurring or one-time task"),
         ("schedules",  "List active schedules"),
         ("unschedule", "Cancel a schedule by ID"),
-        
+
         # Memory & Tasks
         ("remember",  "Save something to memory"),
         ("memory",    "Memory stats & re-index files"),
         ("task",      "View/manage task list: add/done/list"),
-        
+
         # Media & Voice
         ("imagine",   "Generate an image from prompt"),
         ("voice",     "Toggle voice replies mode"),
@@ -635,11 +732,16 @@ async def lifespan(application: FastAPI):
     if os.environ.get("TRANSPORT", "").lower() == "whatsapp":
         asyncio.create_task(_wa_qr_watcher())
     # Start borrow session timeout checker
-    if COLLAB_ENABLED and collab_borrow is not None:
+    if _BRIDGENET_ENABLED and collab_borrow is not None:
         asyncio.create_task(collab_borrow.timeout_checker(
             instances,
             notify_fn=lambda msg: send_message(ALLOWED_USER_ID, msg),
         ))
+    # Start BridgeNet relay heartbeat loop (non-fatal if relay not configured)
+    if _BRIDGENET_ENABLED and _bridgenet_relay_client is not None:
+        relay_url = os.environ.get("BRIDGENET_RELAY_URL", "")
+        if relay_url:
+            asyncio.create_task(_bridgenet_relay_client.start_heartbeat_loop())
     # Free rotating proxy — start if FREE_PROXY_PORT is configured
     _free_proxy_port = int(os.environ.get("FREE_PROXY_PORT", "0"))
     if _free_proxy_port:
@@ -696,28 +798,59 @@ _limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = _limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# -- Collab router (federated peer networking) --------------------------------
+# -- CORS (Bridge Cloud proxy handles auth; BridgeBot is behind Tailscale) ----
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+# -- Bridge Cloud v1 API router -----------------------------------------------
+from v1_api import router as v1_router, api_router as v1_api_router  # noqa: E402
+app.include_router(v1_router)
+app.include_router(v1_api_router)   # /api/chat proxy for static-export frontend
+
+# -- Collab / BridgeNet router (federated peer networking) --------------------
 collab_borrow = None  # type: ignore
 collab_borrow_start = None  # type: ignore
 collab_borrow_message = None  # type: ignore
 collab_borrow_end = None  # type: ignore
 load_peers = None  # type: ignore
+_bridgenet_relay_client = None  # type: ignore
 
-if COLLAB_ENABLED:
+# BridgeNet supersedes Collab — try bridgenet first, fall back to legacy collab
+_BRIDGENET_ENABLED = os.environ.get("BRIDGENET_ENABLED", os.environ.get("COLLAB_ENABLED", "true")).lower() in ("true", "1", "yes")
+
+if _BRIDGENET_ENABLED:
     try:
-        from collab import collab_router
-        from collab import borrow as collab_borrow
-        from collab.client import borrow_start as collab_borrow_start, borrow_message as collab_borrow_message, borrow_end as collab_borrow_end
-        from collab.config import load_peers
-        app.include_router(collab_router)
-        logger.info("Collab module loaded and router mounted at /collab")
-    except Exception as _collab_err:
-        collab_borrow = None  # type: ignore
-        collab_borrow_start = None  # type: ignore
-        collab_borrow_message = None  # type: ignore
-        collab_borrow_end = None  # type: ignore
-        load_peers = None  # type: ignore
-        logger.warning("Collab module failed to load (non-fatal): %s", _collab_err)
+        from bridgenet import bridgenet_router
+        from bridgenet.router import collab_router as _collab_compat_router
+        from bridgenet import borrow as collab_borrow
+        from bridgenet.client import borrow_start as collab_borrow_start, borrow_message as collab_borrow_message, borrow_end as collab_borrow_end
+        from bridgenet.config import load_peers
+        import bridgenet.relay_client as _bridgenet_relay_client
+        app.include_router(bridgenet_router)       # /bridgenet/* endpoints
+        app.include_router(_collab_compat_router)  # /collab/* backward-compat aliases
+        logger.info("BridgeNet module loaded — /bridgenet/* and /collab/* mounted")
+    except Exception as _bn_err:
+        # Fall back to legacy collab module if bridgenet fails
+        logger.warning("BridgeNet failed to load, trying legacy collab: %s", _bn_err)
+        try:
+            from collab import collab_router
+            from collab import borrow as collab_borrow
+            from collab.client import borrow_start as collab_borrow_start, borrow_message as collab_borrow_message, borrow_end as collab_borrow_end
+            from collab.config import load_peers
+            app.include_router(collab_router)
+            logger.info("Legacy collab module loaded at /collab (BridgeNet unavailable)")
+        except Exception as _collab_err:
+            collab_borrow = None  # type: ignore
+            collab_borrow_start = None  # type: ignore
+            collab_borrow_message = None  # type: ignore
+            collab_borrow_end = None  # type: ignore
+            load_peers = None  # type: ignore
+            logger.warning("Collab/BridgeNet module failed to load (non-fatal): %s", _collab_err)
 
 
 @app.get("/health")
@@ -744,7 +877,7 @@ async def direct_query(request: Request, req: DirectQueryRequest, x_api_key: str
         logger.warning("Rejected /query — missing or invalid X-API-Key")
         return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized"})
     try:
-        response = await runner.run_query(req.prompt, timeout_secs=req.timeout_secs)
+        response = await runner.run_query(req.prompt, timeout=req.timeout_secs)
         return {"ok": True, "response": response}
     except asyncio.TimeoutError:
         return JSONResponse(
@@ -757,9 +890,6 @@ async def direct_query(request: Request, req: DirectQueryRequest, x_api_key: str
             status_code=500,
             content={"ok": False, "error": str(exc), "response": ""},
         )
-
-
-    return result
 
 
 
@@ -919,17 +1049,22 @@ async def process_update(body: dict) -> None:
         # Telegram sends multiple sizes; pick the largest (last in array)
         file_id = photo[-1]["file_id"]
         caption = message.get("caption", "")
+        media_group_id = message.get("media_group_id")
         health.record_message()
 
         target_instance = _resolve_target_instance(caption or "photo", user_id)
-        asyncio.create_task(_enqueue_message(QueuedMessage(
+        item = QueuedMessage(
             chat_id=chat_id,
             msg_type=MessageType.PHOTO,
             text=caption,
             file_id=file_id,
             instance_id=target_instance.id,
             user_id=user_id,
-        )))
+        )
+        if media_group_id:
+            _buffer_for_mg(item, str(media_group_id))
+        else:
+            _buffer_for_chat(item)
         return
 
     # Document upload -- save to uploads folder inside memory dir
@@ -1030,22 +1165,23 @@ async def process_update(body: dict) -> None:
     # Regular text message -- route to instance and process
     health.record_message()
 
-    async def _route_and_enqueue():
+    async def _route_and_buffer():
         try:
             target_instance = await _resolve_target_instance_async(text, user_id)
-            await _enqueue_message(QueuedMessage(
+            item = QueuedMessage(
                 chat_id=chat_id,
                 msg_type=MessageType.TEXT,
                 text=text,
                 voice_reply=_voice_reply_mode,
                 instance_id=target_instance.id,
                 user_id=user_id,
-            ))
+            )
+            _buffer_for_chat(item)
         except Exception as e:
-            logger.error("Failed to route/enqueue message: %s", e)
+            logger.error("Failed to route/buffer message: %s", e)
             await send_message(chat_id, f"Error queuing message: {e}")
 
-    asyncio.create_task(_route_and_enqueue())
+    asyncio.create_task(_route_and_buffer())
 
 
 async def _run_polling() -> None:
@@ -1092,13 +1228,13 @@ async def webhook(request: Request):
 @app.get("/wa/qr")
 async def wa_qr_endpoint():
     """Serve the current WhatsApp QR code as a PNG image for scanning in a browser."""
-    from fastapi.responses import FileResponse, HTMLResponse
+    from fastapi.responses import HTMLResponse
     wa_auth_dir = os.environ.get("WA_AUTH_DIR", os.path.expanduser("~/.jefe/wa-auth"))
     qr_png = os.path.join(wa_auth_dir, "qr.png")
     if not os.path.exists(qr_png):
         return HTMLResponse("<html><body><h2>No QR code available yet.</h2><p>Make sure the WhatsApp bridge is running and not yet connected. Refresh in a few seconds.</p></body></html>")
     # Serve with auto-refresh so the browser picks up new QR codes
-    html = f"""<html><head><meta http-equiv="refresh" content="10"><title>WhatsApp QR</title></head>
+    html = """<html><head><meta http-equiv="refresh" content="10"><title>WhatsApp QR</title></head>
 <body style="text-align:center;font-family:sans-serif;padding:2em">
 <h2>Scan with WhatsApp</h2>
 <p>WhatsApp → Linked Devices → Link a Device → scan this QR</p>
@@ -1163,7 +1299,7 @@ async def wa_webhook(request: Request):
     body = await request.json()
     jid: str = body.get("jid", "")
     text: str = body.get("message", "")
-    sender_name: str = body.get("sender_name", "")
+    sender_name: str = body.get("sender_name", "")  # noqa: F841
     media_path: str | None = body.get("media_path")
     media_type: str | None = body.get("media_type")
 
@@ -1270,6 +1406,50 @@ async def trigger_webhook(trigger_id: str, request: Request):
     return JSONResponse({"ok": fired})
 
 
+# ── Bridge Cloud UI (static export) ─────────────────────────────────────────
+# Serves the Next.js static build at the root URL.
+# Must come AFTER all API routes so /v1/*, /health, /webhook etc. take priority.
+_bc_build_env = os.environ.get("BRIDGE_CLOUD_UI_PATH", "")
+_BC_BUILD = Path(_bc_build_env) if _bc_build_env else (
+    Path(__file__).parent.parent / "bridge-cloud" / "out"
+)
+
+if _BC_BUILD.exists():
+    _next_dir = _BC_BUILD / "_next"
+    if _next_dir.exists():
+        app.mount("/_next", _StaticFiles(directory=str(_next_dir)), name="nextjs-assets")
+
+    _NO_CACHE_HEADERS = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"}
+
+    def _html_response(path: str) -> FileResponse:
+        """Serve an HTML file with no-cache headers so iOS Safari always fetches fresh JS."""
+        return FileResponse(path, headers=_NO_CACHE_HEADERS)
+
+    @app.get("/{full_path:path}")
+    async def serve_bridge_cloud_ui(full_path: str):
+        """SPA catch-all: serve Bridge Cloud static files, fallback to SPA shell."""
+        candidate = _BC_BUILD / full_path
+        if candidate.is_file():
+            if str(candidate).endswith(".html"):
+                return _html_response(str(candidate))
+            return FileResponse(str(candidate))
+        # trailingSlash=true: /chat/ → out/chat/index.html
+        index = _BC_BUILD / full_path / "index.html"
+        if index.is_file():
+            return _html_response(str(index))
+        # SPA fallback: for /chat/* serve the chat shell (not root — root redirects
+        # back to /chat and creates an infinite reload loop for dynamic conv IDs).
+        clean = full_path.strip("/")
+        if clean.startswith("chat"):
+            chat_shell = _BC_BUILD / "chat" / "index.html"
+            if chat_shell.is_file():
+                return _html_response(str(chat_shell))
+        root_index = _BC_BUILD / "index.html"
+        if root_index.is_file():
+            return _html_response(str(root_index))
+        return JSONResponse({"detail": "Bridge Cloud UI not built"}, status_code=404)
+
+
 def _resolve_target_instance(text: str, user_id: int = 0):
     """Synchronous instance resolution (for photos etc)."""
     resolve_owner_id = 0 if user_id == ALLOWED_USER_ID else user_id
@@ -1343,7 +1523,8 @@ def _context_footer(inst) -> str:
     used = (inst.last_input_tokens + inst.last_cache_read_tokens
             + inst.last_cache_creation_tokens + inst.last_output_tokens)
     if not used:
-        return f"\n\n\u2014\n{cli_str.lstrip(' \u00b7 ')}" if cli_name else ""
+        _strip_chars = " \u00b7 "
+        return f"\n\n\u2014\n{cli_str.lstrip(_strip_chars)}" if cli_name else ""
     cost_str = f" \u00b7 ${inst.session_cost:.3f}" if inst.session_cost else ""
     if inst.context_window:
         pct = (used / inst.context_window) * 100
@@ -1576,19 +1757,29 @@ async def _handle_document_upload(chat_id: int, file_id: str, dest_path: str, fi
         await send_message(chat_id, f"❌ Failed to save {file_name}: {e}")
 
 
-async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", instance=None, user_id: int = 0) -> None:
-    """Handle an incoming photo: download, send to Claude for vision analysis."""
+async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", instance=None, user_id: int = 0, extra_file_ids: list | None = None) -> None:
+    """Handle an incoming photo (or album): download all, send to runner for vision analysis."""
     inst = instance or instances.active
     proc_owner_id = 0 if user_id == ALLOWED_USER_ID else user_id
-    await send_message(chat_id, _label(inst, "Downloading image...", proc_owner_id), format_markdown=True)
+    n_images = 1 + len(extra_file_ids or [])
+    dl_label = f"Downloading {n_images} images..." if n_images > 1 else "Downloading image..."
+    await send_message(chat_id, _label(inst, dl_label, proc_owner_id), format_markdown=True)
 
-    image_path = None
+    image_paths: list[str] = []
     try:
         # For WhatsApp transport, file_id is already a local path downloaded by the bridge
         if os.path.exists(file_id):
-            image_path = file_id
+            image_paths.append(file_id)
         else:
-            image_path = await download_photo(file_id)
+            image_paths.append(await download_photo(file_id))
+        for extra_id in (extra_file_ids or []):
+            try:
+                if os.path.exists(extra_id):
+                    image_paths.append(extra_id)
+                else:
+                    image_paths.append(await download_photo(extra_id))
+            except Exception as ex:
+                logger.warning("Extra photo download failed (%s): %s", extra_id, ex)
     except Exception as e:
         logger.error("Photo download failed: %s", e)
         await send_message(chat_id, _label(inst, f"\u274c Failed to download photo: {e}", proc_owner_id), format_markdown=True)
@@ -1613,19 +1804,20 @@ async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", 
 
     sender_name = USER_NAMES.get(user_id, "") if user_id else ""
     prefixed_caption = f"[{sender_name}]: {caption}" if sender_name else caption
-    response = await runner.run(prefixed_caption, on_progress=on_progress, image_path=image_path, instance=inst)
+    image_arg = image_paths if len(image_paths) > 1 else image_paths[0]
+    response = await runner.run(prefixed_caption, on_progress=on_progress, image_path=image_arg, instance=inst)
     elapsed = time.time() - start
 
-    logger.info("%s #%d responded to photo in %.1fs (%d chars)", BOT_NAME, inst.id, elapsed, len(response))
+    logger.info("%s #%d responded to photo(s) in %.1fs (%d chars)", BOT_NAME, inst.id, elapsed, len(response))
     response = _strip_footer(response) + _context_footer(inst)
     if thinking_msg_id:
         await delete_message(chat_id, thinking_msg_id)
     await send_message(chat_id, _label(inst, response, proc_owner_id), format_markdown=True)
 
-    # Clean up temp image
-    if image_path:
+    # Clean up temp images
+    for p in image_paths:
         try:
-            os.remove(image_path)
+            os.remove(p)
         except OSError:
             pass
 
@@ -1825,6 +2017,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         "/pipe":    "/agent pipeline",
         "/ask":     "/collab ask",
         "/blast":   "/collab broadcast",
+        "/bn":      "/bridgenet",
         "/run":     "/trigger run",
     }
     if cmd in _aliases:
@@ -1856,7 +2049,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         if cleared:
             parts.append(f"Cleared {cleared} queued message{'s' if cleared != 1 else ''}.")
         if parts:
-            await send_message(chat_id, f"\U0001f6d1 " + " ".join(parts) + label)
+            await send_message(chat_id, "\U0001f6d1 " + " ".join(parts) + label)
         else:
             await send_message(chat_id, f"Nothing running and queue is empty.{label}")
 
@@ -2397,8 +2590,6 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         try:
             from collab.config import load_peers, add_peer, remove_peer, COLLAB_INSTANCE_NAME
             from collab import client as collab_client
-            from collab.feed import get_feed
-            import secrets as _secrets
         except Exception as _e:
             await send_message(chat_id, f"Collab module error: {_e}")
             return
@@ -2450,8 +2641,206 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 "<b>/collab broadcast &lt;msg&gt;</b> — Send to all peers",
                 parse_mode="HTML")
 
+    elif cmd == "/bridgenet":
+        if not _BRIDGENET_ENABLED:
+            await send_message(chat_id, "BridgeNet is disabled. Set BRIDGENET_ENABLED=true to enable.")
+            return
+
+        parts = text.split(maxsplit=2)
+        sub = parts[1].lower() if len(parts) > 1 else ""
+        arg = parts[2] if len(parts) > 2 else ""
+
+        try:
+            from bridgenet.config import load_peers, add_peer, remove_peer, BRIDGENET_NODE_NAME
+            from bridgenet import client as bn_client
+            from bridgenet.feed import get_feed as bn_get_feed
+            from bridgenet.reputation import get_all_reputations
+            from bridgenet.credits import get_balance, get_history
+            import bridgenet.relay_client as _bn_relay
+        except Exception as _e:
+            await send_message(chat_id, f"BridgeNet module error: {_e}")
+            return
+
+        if sub == "ask":
+            # /bridgenet ask <peer> <task>
+            ask_parts = arg.split(maxsplit=1)
+            if len(ask_parts) < 2:
+                await send_message(chat_id, "Usage: /bridgenet ask &lt;peer&gt; &lt;task&gt;", parse_mode="HTML")
+                return
+            target_peer_name, task = ask_parts[0], ask_parts[1]
+            peers = load_peers()
+            if target_peer_name not in peers:
+                await send_message(chat_id, f"Peer '{target_peer_name}' not found. Use /bridgenet peers to see available peers.")
+                return
+            await send_message(chat_id, f"Sending to {target_peer_name} via BridgeNet...")
+            result = await bn_client.delegate_task(peers[target_peer_name], task)
+            await send_message(
+                chat_id,
+                f"<b>Response from {target_peer_name}:</b>\n\n{result}",
+                parse_mode="HTML",
+                format_markdown=True,
+            )
+
+        elif sub == "peers":
+            # /bridgenet peers — list all known peers + relay online status
+            peers = load_peers()
+            relay_url = os.environ.get("BRIDGENET_RELAY_URL", "")
+            relay_nodes = []
+            if relay_url and _bn_relay:
+                try:
+                    relay_nodes = await _bn_relay.list_online_nodes() or []
+                except Exception:
+                    relay_nodes = []
+
+            if not peers and not relay_nodes:
+                await send_message(chat_id, "No peers configured yet.\nUse /bridgenet add &lt;name&gt; &lt;tier&gt; to add one.", parse_mode="HTML")
+                return
+
+            lines = ["<b>BridgeNet Peers</b>\n"]
+            for name, peer in peers.items():
+                tier = peer.get("tier", "acquaintance")
+                lines.append(f"• <b>{name}</b> ({tier})")
+            if relay_nodes:
+                lines.append("\n<b>Online via Relay</b>")
+                for n in relay_nodes:
+                    caps = ", ".join(n.get("capabilities", []))
+                    lines.append(f"• <b>{n.get('node_name', n.get('node_id','?'))}</b> — {caps}")
+            await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+        elif sub == "add":
+            # /bridgenet add <name> <tier> [url] [token]
+            add_parts = arg.split()
+            if len(add_parts) < 2:
+                await send_message(chat_id,
+                    "Usage: /bridgenet add &lt;name&gt; &lt;tier&gt; [url] [token]\n"
+                    "Tiers: family | friend | acquaintance",
+                    parse_mode="HTML")
+                return
+            peer_name_add = add_parts[0]
+            tier_add = add_parts[1].lower()
+            if tier_add not in ("family", "friend", "acquaintance"):
+                await send_message(chat_id, "Tier must be: family, friend, or acquaintance")
+                return
+            url_add = add_parts[2] if len(add_parts) > 2 else ""
+            token_add = add_parts[3] if len(add_parts) > 3 else ""
+            add_peer(peer_name_add, url_add, tier_add, token_add)
+            await send_message(chat_id, f"Added peer <b>{peer_name_add}</b> as {tier_add}.", parse_mode="HTML")
+
+        elif sub == "remove":
+            # /bridgenet remove <name>
+            if not arg:
+                await send_message(chat_id, "Usage: /bridgenet remove &lt;name&gt;", parse_mode="HTML")
+                return
+            removed = remove_peer(arg.strip())
+            if removed:
+                await send_message(chat_id, f"Removed peer <b>{arg.strip()}</b>.", parse_mode="HTML")
+            else:
+                await send_message(chat_id, f"Peer '{arg.strip()}' not found.")
+
+        elif sub == "feed":
+            # /bridgenet feed — show recent activity
+            events = await bn_get_feed(limit=15)
+            if not events:
+                await send_message(chat_id, "No activity yet.")
+                return
+            lines = ["<b>BridgeNet Activity Feed</b>\n"]
+            for ev in reversed(events[-15:]):
+                ts = ev.get("timestamp", 0)
+                import datetime
+                dt = datetime.datetime.fromtimestamp(ts).strftime("%m/%d %H:%M")
+                action = ev.get("action", "")
+                summary = ev.get("summary", "")[:80]
+                lines.append(f"<code>{dt}</code> [{action}] {summary}")
+            await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+        elif sub == "reputation":
+            # /bridgenet reputation — show reputation scores
+            reps = get_all_reputations()
+            if not reps:
+                await send_message(chat_id, "No reputation data yet.")
+                return
+            lines = ["<b>Peer Reputation Scores</b>\n"]
+            for name, score in sorted(reps.items(), key=lambda x: x[1], reverse=True):
+                bar = "█" * int(score * 10) + "░" * (10 - int(score * 10))
+                lines.append(f"• <b>{name}</b>: {bar} {score:.2f}")
+            await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+        elif sub == "credits":
+            # /bridgenet credits — show credit balance and history
+            balance = get_balance()
+            history = get_history(limit=5)
+            lines = [f"<b>BridgeNet Credits</b>\nBalance: <b>{balance}</b>\n\n<b>Recent:</b>"]
+            for tx in history:
+                import datetime
+                dt = datetime.datetime.fromtimestamp(tx.get("ts", 0)).strftime("%m/%d %H:%M")
+                sign = "+" if tx.get("type") == "earn" else "-"
+                lines.append(f"<code>{dt}</code> {sign}{tx.get('amount', 0)} — {tx.get('reason', '')}")
+            await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+        elif sub == "status":
+            # /bridgenet status — relay connection status
+            relay_url = os.environ.get("BRIDGENET_RELAY_URL", "not configured")
+            from bridgenet.config import get_or_create_node_id
+            node_id = get_or_create_node_id()
+            node_name = BRIDGENET_NODE_NAME or "unnamed"
+            relay_connected = False
+            online_count = 0
+            if relay_url != "not configured" and _bn_relay:
+                try:
+                    nodes = await _bn_relay.list_online_nodes()
+                    relay_connected = nodes is not None
+                    online_count = len(nodes or [])
+                except Exception:
+                    relay_connected = False
+            status_icon = "🟢" if relay_connected else "🔴"
+            lines = [
+                "<b>BridgeNet Status</b>",
+                f"Node: <b>{node_name}</b>",
+                f"Node ID: <code>{node_id[:12]}...</code>",
+                f"Relay: <code>{relay_url}</code>",
+                f"Relay connection: {status_icon} {'connected' if relay_connected else 'disconnected'}",
+                f"Online peers: {online_count}",
+            ]
+            await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+        elif sub == "broadcast":
+            if not arg:
+                await send_message(chat_id, "Usage: /bridgenet broadcast &lt;message&gt;", parse_mode="HTML")
+                return
+            peers = load_peers()
+            if not peers:
+                await send_message(chat_id, "No peers configured.")
+                return
+            sent = 0
+            failed = 0
+            for peer_name, peer in peers.items():
+                ok = await bn_client.broadcast_to_peer(peer, arg, from_name=BRIDGENET_NODE_NAME)
+                if ok:
+                    sent += 1
+                else:
+                    failed += 1
+            await send_message(
+                chat_id,
+                f"Broadcast sent to {sent} peer(s)." + (f" {failed} failed." if failed else ""),
+            )
+
+        else:
+            await send_message(chat_id,
+                "<b>BridgeNet Commands</b>\n\n"
+                "/bridgenet peers — who's online\n"
+                "/bridgenet ask &lt;peer&gt; &lt;task&gt; — delegate a task\n"
+                "/bridgenet add &lt;name&gt; &lt;tier&gt; [url] [token] — add a peer\n"
+                "/bridgenet remove &lt;name&gt; — remove a peer\n"
+                "/bridgenet broadcast &lt;msg&gt; — send to all peers\n"
+                "/bridgenet feed — recent activity\n"
+                "/bridgenet reputation — peer scores\n"
+                "/bridgenet credits — your credit balance\n"
+                "/bridgenet status — relay connection\n\n"
+                "Shortcut: /bn",
+                parse_mode="HTML")
+
     elif cmd == "/borrow":
-        if not COLLAB_ENABLED or collab_borrow is None:
+        if not _BRIDGENET_ENABLED or collab_borrow is None:
             await send_message(chat_id, "Collab is disabled. Set COLLAB_ENABLED=true to enable.")
             return
 
@@ -2512,7 +2901,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         )
 
     elif cmd == "/return":
-        if not COLLAB_ENABLED or collab_borrow is None:
+        if not _BRIDGENET_ENABLED or collab_borrow is None:
             await send_message(chat_id, "Collab is disabled. Set COLLAB_ENABLED=true to enable.")
             return
 

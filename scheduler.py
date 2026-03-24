@@ -269,7 +269,6 @@ def remove_schedule(chat_id: int, schedule_id: int) -> bool:
 
 def _get_due_schedules() -> list[dict]:
     """Return all enabled schedules whose next_run is now or past."""
-    import json
     now_iso = _now().isoformat()
     with _connect() as conn:
         rows = conn.execute(
@@ -314,7 +313,7 @@ def _run_task_sync(row: dict, cli_cmd: str, bot_token: str, chat_id_str: str) ->
     task_id = row["id"]
     description = row["description"]
     data = json.loads(row["recurrence"])
-    recurrence_type = data.get("type", "once")
+    recurrence_type = data.get("type", "once")  # noqa: F841
 
     logger.info("Running scheduled task #%s: %s", task_id, description)
 

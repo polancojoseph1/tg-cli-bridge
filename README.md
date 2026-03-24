@@ -281,4 +281,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, how to add runners and opt
 
 ## License
 
-MIT
+This project is licensed under the **Bridgebot Source-Available License v1.0** — see the [LICENSE](LICENSE) file for full terms.
+
+**Key points:**
+- ✅ Free to use for personal, educational, or commercial purposes
+- ✅ Modify for your own internal use
+- ✅ Share unmodified copies with attribution
+- ❌ Cannot redistribute modified versions as a separate project
+- ❌ Cannot sublicense or publish derivative works
+
+Attribution required: *"Built with bridgebot by Joseph Polanco"* or a link to https://github.com/polancojoseph1/bridgebot

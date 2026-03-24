@@ -292,6 +292,11 @@ def get_config():
 
     result["CLI_RUNNER"]["value"] = env.get("CLI_RUNNER", "")
 
+    # Bridge Cloud settings
+    for key in ["BRIDGE_CLOUD_API_KEY", "OPENROUTER_MASTER_KEY"]:
+        val = env.get(key, "")
+        result[key] = {"configured": is_set(val), "value": "", "masked": mask(val) if is_set(val) else ""}
+
     # CLI detection
     result["_cli_detect"] = {name: shutil.which(info["command"]) is not None for name, info in CLI_OPTIONS.items()}
 
@@ -314,8 +319,41 @@ def detect_qwen():
 def clear_config(req: SaveRequest):
     from dotenv import unset_key
     unset_key(str(ENV_PATH), req.key)
-    config_cache = read_env()
+    config_cache = read_env()  # noqa: F841
     return {"ok": True}
+
+
+@app.get("/api/generate-bc-key")
+def generate_bc_key():
+    """Generate a random BRIDGE_CLOUD_API_KEY and save it to .env."""
+    import secrets as _sec
+    key = "bc_live_" + _sec.token_urlsafe(32)
+    set_key(str(ENV_PATH), "BRIDGE_CLOUD_API_KEY", key)
+    return JSONResponse({"key": key, "masked": mask(key)})
+
+
+@app.get("/api/bc-info")
+def bc_info():
+    """Return Bridge Cloud connection info (server URL detection)."""
+    import socket
+    env = read_env()
+    # Try to detect Tailscale URL from env
+    tailscale_url = env.get("TAILSCALE_URL", "") or env.get("EXTERNAL_URL", "")
+    if not tailscale_url:
+        try:
+            hostname = socket.gethostname()
+        except Exception:
+            hostname = "your-server"
+        tailscale_url = f"https://{hostname}"
+    tailscale_url = tailscale_url.rstrip("/")
+    bc_key = env.get("BRIDGE_CLOUD_API_KEY", "")
+    or_key = env.get("OPENROUTER_MASTER_KEY", "")
+    return JSONResponse({
+        "server_url": tailscale_url,
+        "bc_key_set": is_set(bc_key),
+        "bc_key_masked": mask(bc_key) if is_set(bc_key) else "",
+        "or_key_set": is_set(or_key),
+    })
 
 
 @app.get("/api/wa-status")
@@ -375,12 +413,14 @@ async def wa_pairing_code():
 
 @app.post("/api/restart-wa-bridge")
 async def restart_wa_bridge():
-    import subprocess, os
+    import subprocess
+    import os
     plist = os.path.expanduser("~/Library/LaunchAgents/jefe.whatsapp-bridge.plist")
     auth_dir = os.path.expanduser("~/.jefe/wa-auth")
     try:
         subprocess.run(["launchctl", "unload", plist], capture_output=True)
-        import time; time.sleep(1)
+        import time
+        time.sleep(1)
         # Clear stale pairing code so poll detects the new one
         for f in ["pairing_code.txt", "pairing_code.ready"]:
             p = os.path.join(auth_dir, f)
@@ -962,7 +1002,7 @@ let waConfig = {{}};
 let tgExpanded = true;
 let waExpanded = false;
 let currentStep = 0;
-const STEPS = ['Welcome', 'Platform', 'AI Runner', 'Free Keys', 'Done'];
+const STEPS = ['Welcome', 'Platform', 'AI Runner', 'Free Keys', 'Bridge Cloud', 'Done'];
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -977,7 +1017,8 @@ async function boot() {{
   else if (!config.ALLOWED_USER_ID?.configured) currentStep = 1;
   else if (!config.CLI_RUNNER?.value) currentStep = 2;
   else if (config.CLI_RUNNER?.value === 'free') currentStep = 3;
-  else currentStep = 4;
+  else if (!config.BRIDGE_CLOUD_API_KEY?.configured) currentStep = 4;
+  else currentStep = 5;
   renderAll();
 }}
 
@@ -1030,6 +1071,7 @@ function renderStep() {{
   }}
   else if (currentStep === 2) el.innerHTML = renderRunner();
   else if (currentStep === 3) el.innerHTML = renderFreeKeys();
+  else if (currentStep === 4) {{ el.innerHTML = renderBridgeCloud(); setTimeout(loadBcInfo, 50); }}
   else el.innerHTML = renderDone();
 }}
 
@@ -1613,7 +1655,139 @@ function skipProvider(i) {{
 }}
 
 // ---------------------------------------------------------------------------
-// Step 4: Done
+// Step 4: Bridge Cloud
+// ---------------------------------------------------------------------------
+let bcInfo = null;
+
+async function loadBcInfo() {{
+  bcInfo = await fetch('/api/bc-info').then(r => r.json()).catch(() => ({{}}));
+  config = await fetch('/api/config').then(r => r.json());
+  document.getElementById('mainContent').innerHTML = renderBridgeCloud();
+}}
+
+async function generateBcKey() {{
+  const btn = document.getElementById('bcGenBtn');
+  btn.disabled = true; btn.textContent = 'Generating…';
+  const data = await fetch('/api/generate-bc-key').then(r => r.json());
+  config.BRIDGE_CLOUD_API_KEY = {{ configured: true, masked: data.masked }};
+  document.getElementById('bcKeyDisplay').textContent = data.key;
+  document.getElementById('bcKeyRow').style.display = 'flex';
+  document.getElementById('bcKeyStatus').innerHTML = '<span style="color:var(--green)">✓ Key generated and saved</span>';
+  btn.textContent = 'Regenerate'; btn.disabled = false;
+}}
+
+async function saveBcOrKey() {{
+  const val = document.getElementById('bcOrInput').value.trim();
+  if (!val) return;
+  await fetch('/api/save', {{ method: 'POST', headers: {{'Content-Type':'application/json'}},
+    body: JSON.stringify({{key: 'OPENROUTER_MASTER_KEY', value: val}}) }});
+  config.OPENROUTER_MASTER_KEY = {{ configured: true }};
+  document.getElementById('bcOrStatus').innerHTML = '<span style="color:var(--green)">✓ Saved</span>';
+  document.getElementById('bcOrInput').value = '';
+}}
+
+function copyBcKey() {{
+  const key = document.getElementById('bcKeyDisplay').textContent;
+  if (key && key !== '—') navigator.clipboard.writeText(key).then(() => showToast('✓ API key copied!'));
+}}
+
+function renderBridgeCloud() {{
+  const bcKeyOk = config.BRIDGE_CLOUD_API_KEY?.configured;
+  const orKeyOk = config.OPENROUTER_MASTER_KEY?.configured;
+  const serverUrl = bcInfo?.server_url || 'https://your-server.tailXXXX.ts.net';
+  const bcKeyMasked = config.BRIDGE_CLOUD_API_KEY?.masked || '';
+
+  return `
+  <div class="card">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <span style="font-size:22px">☁️</span>
+      <h2 style="font-size:20px;font-weight:700">Bridge Cloud</h2>
+    </div>
+    <p style="color:var(--muted);font-size:14px;margin-bottom:24px">
+      Bridge Cloud is the web UI that lets users chat with your bots from any browser.
+      Set up your server credentials so Bridge Cloud can connect.
+    </p>
+
+    <!-- Section 1: BC API Key -->
+    <div style="border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="font-size:15px;font-weight:600">Server API Key</h3>
+        <span style="font-size:12px;padding:2px 8px;background:var(--blue-dim);color:var(--blue);border-radius:20px">REQUIRED</span>
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+        A secret key that secures your <code>/v1/</code> endpoints.
+        Bridge Cloud sends this with every request — users can't connect without it.
+      </p>
+      <div id="bcKeyStatus" style="margin-bottom:10px;font-size:13px">
+        ${{bcKeyOk
+          ? `<span style="color:var(--green)">✓ Key is set (${{bcKeyMasked}})</span>`
+          : `<span style="color:var(--muted)">No key set yet — generate one below.</span>`
+        }}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button id="bcGenBtn" class="btn btn-primary btn-sm" onclick="generateBcKey()">
+          ${{bcKeyOk ? 'Regenerate Key' : '⚡ Generate Key'}}
+        </button>
+        <div id="bcKeyRow" style="display:${{bcKeyOk ? 'none' : 'none'}};align-items:center;gap:8px;flex:1;min-width:200px">
+          <code id="bcKeyDisplay" style="font-size:12px;color:var(--green);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">—</code>
+          <button class="btn btn-ghost btn-sm" onclick="copyBcKey()">Copy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 2: OpenRouter Master Key -->
+    <div style="border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="font-size:15px;font-weight:600">OpenRouter Key</h3>
+        <span style="font-size:12px;padding:2px 8px;background:${{orKeyOk ? 'var(--green-dim)' : 'rgba(240,136,62,0.15)'}};color:${{orKeyOk ? 'var(--green)' : 'var(--orange)'}};border-radius:20px">
+          ${{orKeyOk ? '✓ SET' : 'RECOMMENDED'}}
+        </span>
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px">
+        Your master OpenRouter key. When users sign up on Bridge Cloud, the server
+        automatically provisions them a scoped API key using this.
+        <strong>One key to rule all your users — they never need to create their own.</strong>
+      </p>
+      <ol style="font-size:13px;color:var(--muted);padding-left:18px;margin-bottom:14px;line-height:1.8">
+        <li>Go to <a href="https://openrouter.ai/keys" target="_blank" style="color:var(--blue)">openrouter.ai/keys</a> — sign in with Google or GitHub</li>
+        <li>Click <strong style="color:var(--text)">Create Key</strong>, name it <code>bridge-cloud-master</code></li>
+        <li>Copy the key (starts with <code>sk-or-v1-</code>) and paste below</li>
+      </ol>
+      <div id="bcOrStatus" style="margin-bottom:10px;font-size:13px">
+        ${{orKeyOk ? '<span style="color:var(--green)">✓ OpenRouter key is configured</span>' : ''}}
+      </div>
+      <div style="display:flex;gap:8px">
+        <input id="bcOrInput" type="password" placeholder="sk-or-v1-..." style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 12px;color:var(--text);font-size:13px" />
+        <button class="btn btn-primary btn-sm" onclick="saveBcOrKey()">Save</button>
+      </div>
+    </div>
+
+    <!-- Section 3: Your Server URL -->
+    <div style="border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:24px">
+      <h3 style="font-size:15px;font-weight:600;margin-bottom:8px">Your Server URL</h3>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:12px">
+        This is what you (or your users) paste into Bridge Cloud's <strong>Server URL</strong> field.
+        Set <code>TAILSCALE_URL</code> or <code>EXTERNAL_URL</code> in your .env to show the correct URL here.
+      </p>
+      <div style="display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px 16px">
+        <code style="flex:1;font-size:13px;color:var(--green);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="bcServerUrl">${{serverUrl}}</code>
+        <button class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('bcServerUrl').textContent).then(()=>showToast('✓ URL copied!'))">Copy</button>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-top:8px">
+        In Bridge Cloud → click <strong>Connect Server</strong> → select <strong>Local</strong> → paste this URL + your API key above.
+      </p>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep(3)">← Back</button>
+      <button class="btn btn-primary" onclick="nextStep()">Continue →</button>
+    </div>
+  </div>`;
+}}
+
+
+// ---------------------------------------------------------------------------
+// Step 5: Done
 // ---------------------------------------------------------------------------
 function renderDone() {{
   const tokenOk = config.TELEGRAM_BOT_TOKEN?.configured;
@@ -1690,6 +1864,7 @@ function renderDone() {{
       <button class="btn btn-secondary" onclick="goStep(1)">← Edit Platform</button>
       <button class="btn btn-secondary" onclick="goStep(2)">← Edit Runner</button>
       ${{runner === 'free' ? `<button class="btn btn-secondary" onclick="goStep(3)">← Edit Free Keys</button>` : ''}}
+      <button class="btn btn-secondary" onclick="goStep(4)">← Edit Bridge Cloud</button>
     </div>
   </div>`;
 }}
@@ -1740,8 +1915,8 @@ def open_browser():
 
 
 if __name__ == "__main__":
-    print(f"\n  ⚡ Bridgebot Setup Wizard")
+    print("\n  ⚡ Bridgebot Setup Wizard")
     print(f"  Opening http://localhost:{PORT} ...")
-    print(f"  Press Ctrl+C to stop\n")
+    print("  Press Ctrl+C to stop\n")
     threading.Thread(target=open_browser, daemon=True).start()
     uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="warning")

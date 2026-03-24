@@ -13,7 +13,6 @@ Public API:
     format_agent_list() -> str
 """
 
-import asyncio
 import logging
 import os
 import re
@@ -31,12 +30,12 @@ except ImportError:
         def __call__(self): return self._zi
     LOCAL_TZ = ZoneInfo(os.environ.get("TIMEZONE", "UTC"))  # type: ignore
 
-from agent_registry import AgentDefinition, resolve_agent, list_agents, seed_default_agents, seed_default_skills, get_agent, get_agent_by_name
+from agent_registry import AgentDefinition, resolve_agent, list_agents, seed_default_agents, seed_default_skills, get_agent
 from agent_skills import build_skills_prompt
 from instance_manager import InstanceManager, Instance
 
 logger = logging.getLogger("bridge.agent_manager")
-from config import MEMORY_DIR
+from config import MEMORY_DIR  # noqa: E402
 SCHEDULE_FILE = str(Path(MEMORY_DIR) / "SCHEDULE.md")
 
 # Maps agent_id -> instance_id for currently-running agent instances
@@ -71,6 +70,18 @@ def spawn_agent(agent_id: str, instances: InstanceManager, owner_id: int = 0) ->
         logger.warning("spawn_agent: invalid model '%s' for agent '%s', using default", model, agent_id)
         model = ""
     inst.model = model
+
+    # Pre-pin CLI runner if agent.model is a known runner name (e.g. "gemini", "codex", "qwen")
+    _CLI_RUNNER_NAMES = {"claude", "gemini", "codex", "qwen"}
+    if model in _CLI_RUNNER_NAMES:
+        try:
+            from server import runner as _server_runner
+            from runners.cli_router import CLIRouterRunner
+            if isinstance(_server_runner, CLIRouterRunner):
+                _server_runner._instance_active[inst.id] = model
+                logger.info("spawn_agent: pre-pinned runner '%s' for agent '%s' (instance #%d)", model, agent_id, inst.id)
+        except Exception as _pin_err:
+            logger.debug("spawn_agent: could not pre-pin runner: %s", _pin_err)
 
     _agent_instance_map[agent_id] = inst.id
     logger.info("Spawned agent '%s' as instance #%d", agent_id, inst.id)
@@ -141,7 +152,7 @@ async def assign_task(
         return False
 
     agent = get_agent(agent_id)
-    agent_name = agent.name if agent else agent_id
+    agent_name = agent.name if agent else agent_id  # noqa: F841
 
     item = QueuedMessage(
         chat_id=chat_id,
@@ -361,7 +372,8 @@ async def fix_agent_prompt(agent_id: str, rule: str, instances: InstanceManager 
     Returns a status message.
     """
     from agent_registry import update_agent
-    from runners import create_runner; _qrunner = create_runner()
+    from runners import create_runner
+    _qrunner = create_runner()
 
     agent = get_agent(agent_id)
     if agent is None:
@@ -495,8 +507,8 @@ async def _diagnose_mistake(agent_name: str, task_response_text: str, feedback: 
         f"Start with 'Root cause:' and do not add any preamble or explanation."
     )
     url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.5-flash:generateContent"
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        "gemini-2.5-flash:generateContent"
     )
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -529,7 +541,8 @@ async def record_agent_feedback(agent_id: str, feedback: str, instances: Instanc
     Returns a status message.
     """
     from agent_memory import record_outcome, get_last_agent_response
-    from runners import create_runner; _qrunner = create_runner()
+    from runners import create_runner
+    _qrunner = create_runner()
 
     agent = get_agent(agent_id)
     if agent is None:
@@ -588,7 +601,8 @@ async def auto_critique(agent_id: str, task: str, response: str) -> list[str]:
     Designed to run async in the background — doesn't block the user response.
     """
     import time
-    from runners import create_runner; _qrunner = create_runner()
+    from runners import create_runner
+    _qrunner = create_runner()
 
     agent = get_agent(agent_id)
     if agent is None:

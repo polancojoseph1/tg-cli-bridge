@@ -9,8 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
-import subprocess
 import sys
 import tempfile
 from typing import Callable, Awaitable
@@ -116,7 +114,7 @@ class GeminiRunner(RunnerBase):
         message: str,
         instance,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,
@@ -170,7 +168,9 @@ class GeminiRunner(RunnerBase):
             system_prompt_file.close()
             env["GEMINI_SYSTEM_MD"] = system_prompt_file.name
 
-        # Build prompt
+        # Build prompt (normalize list → first image)
+        if isinstance(image_path, list):
+            image_path = image_path[0] if image_path else None
         if image_path:
             if message:
                 prompt = f"Look at the image file at: {image_path}\n\n{message}"

@@ -6,6 +6,7 @@ No session management, no streaming, plain text output.
 
 import asyncio
 import logging
+import os
 import re
 from typing import Callable, Awaitable
 
@@ -89,7 +90,7 @@ class GenericRunner(RunnerBase):
         message: str,
         instance,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,

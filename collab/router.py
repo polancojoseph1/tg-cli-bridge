@@ -16,7 +16,6 @@ import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .auth import get_peer
@@ -335,7 +334,6 @@ async def borrow_start(
 
     # Create a guest instance for this borrow session
     try:
-        from instance_manager import InstanceManager
         import server as _server_mod
         _instances = _server_mod.instances
         guest_instance = _instances.create(

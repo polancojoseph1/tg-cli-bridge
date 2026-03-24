@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -97,7 +96,7 @@ class QwenRunner(RunnerBase):
         message: str,
         instance,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,

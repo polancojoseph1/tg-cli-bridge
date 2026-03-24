@@ -1,6 +1,5 @@
 """Tests for telegram_handler.py — markdown conversion and message splitting."""
 import os
-import pytest
 
 # Minimal env so config imports don't crash
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1234567890:AAtesttoken")
@@ -36,12 +35,17 @@ class TestSplitMessage:
 
 class TestMarkdownToTelegramHtml:
     def test_bold(self):
+        # Bold markers are stripped to plain text (intentional — keeps chat readable)
         result = markdown_to_telegram_html("**hello**")
-        assert "<b>hello</b>" in result
+        assert "hello" in result
+        assert "**" not in result
+        assert "<b>" not in result
 
     def test_italic(self):
+        # Italic markers are stripped to plain text (intentional — keeps chat readable)
         result = markdown_to_telegram_html("*hello*")
-        assert "<i>hello</i>" in result
+        assert "hello" in result
+        assert "<i>" not in result
 
     def test_code_block(self):
         result = markdown_to_telegram_html("```\ncode\n```")
@@ -52,9 +56,12 @@ class TestMarkdownToTelegramHtml:
         result = markdown_to_telegram_html("`code`")
         assert "<code>code</code>" in result
 
-    def test_header_becomes_bold(self):
+    def test_header_becomes_plain_text(self):
+        # Headers are stripped to plain text (## prefix removed, no HTML tag wrapping)
         result = markdown_to_telegram_html("## Title")
-        assert "<b>Title</b>" in result
+        assert "Title" in result
+        assert "##" not in result
+        assert "<b>" not in result
 
     def test_html_entities_escaped(self):
         result = markdown_to_telegram_html("<script>alert(1)</script>")

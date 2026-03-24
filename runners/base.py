@@ -18,7 +18,6 @@ import os
 import platform
 import shutil
 import subprocess
-import sys
 from typing import AsyncGenerator, Callable, Awaitable, Any
 
 # Subprocess logger wrapper script path
@@ -85,7 +84,7 @@ class RunnerBase(ABC):
         message: str,
         instance: Any,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         user_is_owner: bool = True,
     ) -> str:
@@ -272,6 +271,10 @@ class RunnerBase(ABC):
         elif name in ("Agent", "Task"):
             desc = params.get("description", params.get("prompt", ""))[:100]
             return f"\U0001f916 Sub-agent: {desc}"
+        elif name == "start_new_jules_task":
+            repo = params.get("repo_name", "")
+            task = params.get("user_task_description", "")[:150]
+            return f"\U0001f9d1\u200d\U0001f4bb Jules: {repo} — {task}" if repo else f"\U0001f9d1\u200d\U0001f4bb Jules: {task}"
         elif name:
             return f"\U0001f527 {name}"
         return ""

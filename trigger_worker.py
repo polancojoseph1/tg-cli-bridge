@@ -12,7 +12,6 @@ Public API:
 
 import asyncio
 import logging
-import time
 
 logger = logging.getLogger("bridge.trigger_worker")
 

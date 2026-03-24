@@ -261,12 +261,12 @@ class CLIRouterRunner(RunnerBase):
         last_used = self._instance_active.get(instance_id)
 
         result = []
-        # 1. Pinned preference
-        if preferred and preferred in available:
-            result.append(preferred)
-        # 2. Last-used for this instance
-        if last_used and last_used in available and last_used not in result:
+        # 1. Instance-level pin (set by agent spawn or user — always wins)
+        if last_used and last_used in available:
             result.append(last_used)
+        # 2. Global preference (only applies when no instance pin exists)
+        if preferred and preferred in available and preferred not in result:
+            result.append(preferred)
         # 3. Remaining in configured order
         for name in available:
             if name not in result:
@@ -336,7 +336,7 @@ class CLIRouterRunner(RunnerBase):
         message: str,
         instance: Any,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,

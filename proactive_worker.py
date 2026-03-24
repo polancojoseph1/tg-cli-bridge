@@ -21,7 +21,7 @@ import asyncio
 import logging
 import os
 import re
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from agent_registry import list_agents

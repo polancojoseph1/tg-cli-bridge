@@ -119,6 +119,12 @@ GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
 # Internal API key — required for /query and other direct HTTP endpoints (n8n, scripts)
 INTERNAL_API_KEY: str = os.environ.get("INTERNAL_API_KEY", "")
 
+# Bridge Cloud API key — required for /v1/chat and /v1/health (Bridge Cloud proxy)
+BRIDGE_CLOUD_API_KEY: str = os.environ.get("BRIDGE_CLOUD_API_KEY", "")
+
+# OpenRouter master key — used by /v1/provision to create per-user scoped keys
+OPENROUTER_MASTER_KEY: str = os.environ.get("OPENROUTER_MASTER_KEY", "")
+
 # Voice settings
 WHISPER_MODEL: str = os.environ.get("WHISPER_MODEL", "base")
 EDGE_TTS_VOICE: str = os.environ.get("EDGE_TTS_VOICE", "en-US-AndrewNeural")

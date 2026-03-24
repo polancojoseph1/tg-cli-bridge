@@ -9,8 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
-import subprocess
 import sys
 from datetime import date
 from typing import Callable, Awaitable
@@ -211,7 +209,7 @@ class CodexRunner(RunnerBase):
         message: str,
         instance,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,
@@ -228,7 +226,9 @@ class CodexRunner(RunnerBase):
         except FileNotFoundError:
             return "\u274c Error: codex CLI not found. Is Codex CLI installed?"
 
-        # Build the base message
+        # Build the base message (normalize list → first image)
+        if isinstance(image_path, list):
+            image_path = image_path[0] if image_path else None
         if image_path:
             base_message = (f"Look at the image file at: {image_path}\n\n{message}"
                             if message else

@@ -530,9 +530,9 @@ def show_dashboard(existing: dict):
         path = shutil.which(cli_info["command"])
         cli_display = cli_info["label"]
         if path:
-            cli_display += f" (installed)"
+            cli_display += " (installed)"
         else:
-            cli_display += f" (not found in PATH!)"
+            cli_display += " (not found in PATH!)"
     elif runner == "generic":
         cmd = existing.get("CLI_COMMAND", "")
         cli_display = f"Custom: {cmd}" if cmd else "Generic (no command set)"
@@ -966,7 +966,7 @@ def step_cli_runner(existing: dict):
             print()
             print(f"    {info['label']} is not installed yet.")
             print()
-            print(f"    To install it, run:")
+            print("    To install it, run:")
             print(f"      {info['install']}")
             print()
             print(f"    More info: {info['url']}")
@@ -1030,7 +1030,7 @@ def config_server(existing: dict):
     # Try to auto-detect Tailscale URL
     detected_url = _detect_tailscale_url()
     if detected_url:
-        print(f"  Tailscale detected! Your URL appears to be:")
+        print("  Tailscale detected! Your URL appears to be:")
         print(f"  {detected_url}")
         print()
         if prompt_yes_no("  Use this URL?", default=True):
@@ -1293,7 +1293,7 @@ def run_bot(existing: dict):
         if not shutil.which(cmd):
             print()
             print(f"    Warning: '{cmd}' is not installed or not in your PATH.")
-            print(f"    The bot will start but won't be able to run AI queries.")
+            print("    The bot will start but won't be able to run AI queries.")
             print(f"    Install: {CLI_OPTIONS[runner]['install']}")
             print()
             if not prompt_yes_no("  Start anyway?", default=False):
@@ -1493,7 +1493,7 @@ def print_summary(existing: dict):
         print("  Settings saved (not fully configured yet)")
     print("=" * 46)
     print()
-    print(f"  Your config is saved at:")
+    print("  Your config is saved at:")
     print(f"  {ENV_PATH}")
     print()
 

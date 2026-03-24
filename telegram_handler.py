@@ -78,7 +78,11 @@ def _convert_markdown_tables(text: str) -> str:
 
 
 def markdown_to_telegram_html(text: str) -> str:
-    """Convert GitHub-flavored markdown to Telegram-compatible HTML."""
+    """Convert GitHub-flavored markdown to Telegram-compatible HTML.
+
+    Keep code blocks formatted; strip bold/italic/headers so responses
+    read as plain conversational text.
+    """
     # Escape HTML entities first so Claude's output can't inject tags
     text = html.escape(text)
 
@@ -91,7 +95,6 @@ def markdown_to_telegram_html(text: str) -> str:
     # Inline code (`...`) → <code>...</code>, but URLs → <a href>
     def _inline_code(m: re.Match) -> str:
         inner = m.group(1).strip()
-        # html.escape was already applied, so check for http/https in escaped form
         if re.match(r"https?://", inner):
             return f'<a href="{inner}">{inner}</a>'
         return f"<code>{inner}</code>"
@@ -100,16 +103,16 @@ def markdown_to_telegram_html(text: str) -> str:
     # Bare URLs (not already inside an href) → <a href>
     text = re.sub(r'(?<!href=")(https?://[^\s<>"]+)', r'<a href="\1">\1</a>', text)
 
-    # Headers (## ...) → bold line
-    text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
+    # Headers (## ...) → plain text, strip the # prefix
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"\1", text, flags=re.MULTILINE)
 
-    # Bold (**...**) → <b>...</b>
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    # Bold (**...**) → plain text, strip the **
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
 
-    # Italic (*...*) → <i>...</i>
-    text = re.sub(r"\*(.+?)\*", r"<i>\1</i>", text)
+    # Italic (*...*) → plain text, strip the *
+    text = re.sub(r"\*(.+?)\*", r"\1", text)
 
-    # Horizontal rules
+    # Horizontal rules → remove
     text = re.sub(r"^---+$", "", text, flags=re.MULTILINE)
 
     # Collapse 3+ blank lines to 2

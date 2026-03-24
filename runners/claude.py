@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 import uuid
 from typing import Callable, Awaitable
@@ -140,7 +139,7 @@ class ClaudeRunner(RunnerBase):
         message: str,
         instance,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,
@@ -157,7 +156,8 @@ class ClaudeRunner(RunnerBase):
         session_id = instance.session_id
         session_started = instance.session_started
 
-        model = instance.model or "claude-sonnet-4-6"
+        _CLI_RUNNER_NAMES = {"claude", "gemini", "codex", "qwen", "free", "freecode"}
+        model = instance.model if instance.model and instance.model not in _CLI_RUNNER_NAMES else "claude-sonnet-4-6"
         cmd = [binary, "-p", "--model", model,
                "--dangerously-skip-permissions",
                "--verbose", "--output-format", "stream-json"]
@@ -205,10 +205,14 @@ class ClaudeRunner(RunnerBase):
             cmd += ["--append-system-prompt", "\n\n".join(system_parts)]
 
         if image_path:
-            if message:
-                prompt = f"First, use the Read tool to view the image file at: {image_path}\n\nThen respond to the user's request: {message}"
+            paths = image_path if isinstance(image_path, list) else [image_path]
+            if len(paths) == 1:
+                read_instructions = f"First, use the Read tool to view the image file at: {paths[0]}"
+                suffix = "Describe what you see in the image." if not message else f"Then respond to the user's request: {message}"
             else:
-                prompt = f"Use the Read tool to view the image file at: {image_path}\n\nDescribe what you see in the image."
+                read_instructions = "First, use the Read tool to view each image file:\n" + "\n".join(f"- {p}" for p in paths)
+                suffix = "Describe what you see in each image." if not message else f"Then respond to the user's request: {message}"
+            prompt = f"{read_instructions}\n\n{suffix}"
             cmd.append(prompt)
         else:
             cmd.append(message.replace("\x00", ""))
@@ -416,7 +420,7 @@ class ClaudeRunner(RunnerBase):
             if "session" in _log_tail.lower():
                 self.new_session(instance)
                 return "\u274c Session error. New conversation started \u2014 please resend your message."
-            return "\u274c Claude exited with an error." if not _log_tail else f"\u274c Claude error (check logs)"
+            return "\u274c Claude exited with an error." if not _log_tail else "\u274c Claude error (check logs)"
 
         if result_is_error:
             lowered_result = final_result.lower()

@@ -20,7 +20,7 @@ import sys
 import time
 from typing import Callable, Awaitable
 
-from runners.base import RunnerBase, _SUBPROCESS_LOGGER
+from runners.base import _SUBPROCESS_LOGGER
 from runners.freecode import FreeCodeBaseRunner
 
 logger = logging.getLogger("bridge.free")
@@ -140,7 +140,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
         message: str,
         instance,
         on_progress: Callable[[str], Awaitable[None]] | None = None,
-        image_path: str | None = None,
+        image_path: str | list | None = None,
         memory_context: str = "",
         on_subprocess_started: Callable[[int, str, str], None] | None = None,
         chat_id: int = 0,
@@ -313,6 +313,9 @@ class FreeCodeRunner(FreeCodeBaseRunner):
                         _session_corrupt = True
                     elif on_progress:
                         await on_progress(f"\u274c {err_name}: {err_msg[:200]}")
+                    else:
+                        # No progress callback (Bridge Cloud path) — surface error as response
+                        _pending_text = f"\u274c {err_name}: {err_msg[:200]}"
 
             await proc.wait()
 

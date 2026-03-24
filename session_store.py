@@ -107,13 +107,17 @@ class SessionStore:
             if existing:
                 cols, params = ["updated_at=?"], [now]
                 if title is not None:
-                    cols.append("title=?"); params.append(title)
+                    cols.append("title=?")
+                    params.append(title)
                 if session_id is not None:
-                    cols.append("session_id=?"); params.append(session_id)
+                    cols.append("session_id=?")
+                    params.append(session_id)
                 if status is not None:
-                    cols.append("status=?"); params.append(status)
+                    cols.append("status=?")
+                    params.append(status)
                 if original_prompt is not None:
-                    cols.append("original_prompt=?"); params.append(original_prompt[:1000])
+                    cols.append("original_prompt=?")
+                    params.append(original_prompt[:1000])
                 _ALLOWED_SESSION_COLS = {
                     "updated_at=?", "title=?", "session_id=?", "status=?", "original_prompt=?",
                 }
