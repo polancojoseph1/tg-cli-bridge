@@ -179,31 +179,7 @@ class FreeCodeBaseRunner(RunnerBase):
 
         # Build the prompt with system context prepended
         # (freecode doesn't have --append-system-prompt, so we prepend to the message)
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint
-                    + f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the edit or write tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context)
 
         # Build prompt
         if image_path:

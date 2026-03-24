@@ -241,6 +241,39 @@ class RunnerBase(ABC):
         finally:
             f.close()
 
+
+    def build_system_prompt(self, instance: Any, memory_context: str = "", extra_instructions: list[str] | None = None, memory_tool_names: str = "edit or write") -> list[str]:
+        """Build the system prompt parts including agent prompt, memory context, and global prompt."""
+        system_parts = []
+        if instance.agent_system_prompt:
+            system_parts.append(instance.agent_system_prompt)
+        else:
+            if getattr(self, "memory_enabled", False):
+                memory_dir = getattr(self, "memory_dir", "")
+                user_md_path = os.path.join(memory_dir, "USER.md")
+                user_md_hint = (
+                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
+                    if os.path.exists(user_md_path) else ""
+                )
+                system_parts.append(
+                    f"You have a persistent memory system at {memory_dir}/. "
+                    + user_md_hint
+                    + f"and {memory_dir}/MEMORY.md for project context and instructions. "
+                    "If you learn new important facts during this conversation "
+                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
+                    f"update the appropriate file in {memory_dir}/ using the {memory_tool_names} tool. "
+                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
+                    "For new topics, create a new .md file with a descriptive name. "
+                    "Only update when there's genuinely new durable information — not for transient questions."
+                )
+            if hasattr(self, "system_prompt") and self.system_prompt:
+                system_parts.append(self.system_prompt)
+            if extra_instructions:
+                system_parts.extend(extra_instructions)
+        if memory_context:
+            system_parts.append(memory_context)
+        return system_parts
+
     def format_tool_progress(self, name: str, params: dict) -> str:
         """Format a tool call into a human-readable progress string.
 
