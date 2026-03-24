@@ -9,7 +9,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import sys
 import uuid
 from typing import Callable, Awaitable
@@ -51,7 +50,7 @@ class ClaudeRunner(RunnerBase):
         except FileNotFoundError:
             return '{"error": "claude CLI not found"}'
 
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env = self.build_env({k: v for k, v in os.environ.items() if k != "CLAUDECODE"}, True)
         cmd = [
             binary, "-p", "--model", "claude-haiku-4-5-20251001",
             "--dangerously-skip-permissions",
@@ -76,30 +75,6 @@ class ClaudeRunner(RunnerBase):
 
         return self.format_query_result(None, stdout_data, stderr_data)
 
-    # Env vars stripped from subprocess when running on behalf of a non-owner user
-    _SENSITIVE_ENV_PATTERNS = re.compile(
-        r"^(AWS_|GOOGLE_|GCP_|GCLOUD_|GITHUB_|GH_|GITLAB_|AZURE_|STRIPE_|"
-        r"TWILIO_|SENDGRID_|CLOUDFLARE_|DIGITALOCEAN_|HEROKU_|VERCEL_|NETLIFY_|"
-        r"OPENAI_|GEMINI_|COHERE_|MISTRAL_|TOGETHER_)",
-        re.IGNORECASE,
-    )
-    _SENSITIVE_ENV_EXACT = {
-        "SSH_AUTH_SOCK", "SSH_AGENT_PID",
-        "INTERNAL_API_KEY", "TELEGRAM_BOT_TOKEN", "COLLAB_TOKEN",
-        "ALLOWED_USER_ID", "ALLOWED_USER_IDS", "USER_NAMES",
-    }
-
-    def _build_env(self, user_is_owner: bool) -> dict:
-        """Build subprocess environment. Strip sensitive vars for non-owner users."""
-        base = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
-        if user_is_owner:
-            return base
-        return {
-            k: v for k, v in base.items()
-            if k not in self._SENSITIVE_ENV_EXACT
-            and not self._SENSITIVE_ENV_PATTERNS.match(k)
-        }
-
     async def run(
         self,
         message: str,
@@ -118,7 +93,7 @@ class ClaudeRunner(RunnerBase):
         except FileNotFoundError:
             return "\u274c Error: claude CLI not found. Is Claude Code installed?"
 
-        env = self._build_env(user_is_owner)
+        env = self.build_env({k: v for k, v in os.environ.items() if k != "CLAUDECODE"}, user_is_owner)
         session_id = instance.session_id
         session_started = instance.session_started
 
@@ -142,31 +117,7 @@ class ClaudeRunner(RunnerBase):
             cmd += ["--session-id", session_id]
 
         # Build combined system prompt
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint +
-                    f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the Edit or Write tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context, memory_tool_names="Edit or Write")
         if system_parts:
             cmd += ["--append-system-prompt", "\n\n".join(system_parts)]
 

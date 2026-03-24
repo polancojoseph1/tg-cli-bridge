@@ -38,7 +38,7 @@ class QwenRunner(RunnerBase):
         except FileNotFoundError:
             return '{"error": "qwen CLI not found"}'
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), True)
         cmd = [binary, "--yolo", "--output-format", "text", prompt]
 
         try:
@@ -76,7 +76,7 @@ class QwenRunner(RunnerBase):
         except FileNotFoundError:
             return "\u274c Error: qwen CLI not found. Is Qwen Coder installed? (npm install -g @qwen-code/qwen-code)"
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), user_is_owner)
         session_id = instance.session_id
         session_started = instance.session_started
 
@@ -88,35 +88,8 @@ class QwenRunner(RunnerBase):
             cmd += ["--session-id", session_id]
 
         # Build system prompt via QWEN_SYSTEM_MD env var
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint +
-                    f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the write_file or edit tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-            system_parts.append(
-                "Web search is rate-limited. Minimize search calls: combine related queries into one, "
-                "and avoid re-searching the same topic. One well-crafted query is better than several rapid ones."
-            )
-        if memory_context:
-            system_parts.append(memory_context)
+        extra_instructions = ["Web search is rate-limited. Minimize search calls: combine related queries into one, and avoid re-searching the same topic. One well-crafted query is better than several rapid ones."]
+        system_parts = self.build_system_prompt(instance, memory_context, extra_instructions, memory_tool_names="write_file or edit")
 
         system_prompt_file = None
         if system_parts:

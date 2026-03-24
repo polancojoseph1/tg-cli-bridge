@@ -343,7 +343,7 @@ def bc_info():
             hostname = socket.gethostname()
         except Exception:
             hostname = "your-server"
-        tailscale_url = f"https://{hostname}"
+        tailscale_url = f"https://{hostname}.tailXXXX.ts.net"
     tailscale_url = tailscale_url.rstrip("/")
     bc_key = env.get("BRIDGE_CLOUD_API_KEY", "")
     or_key = env.get("OPENROUTER_MASTER_KEY", "")
@@ -1026,6 +1026,7 @@ let waConfig = {{}};
 let tgExpanded = true;
 let waExpanded = false;
 let currentStep = 0;
+let selectedPlatform = 'telegram';
 const STEPS = ['Welcome', 'Platform', 'AI Runner', 'Free Keys', 'Bridge Cloud', 'Done'];
 
 // ---------------------------------------------------------------------------
@@ -1718,7 +1719,8 @@ function copyBcKey() {{
 function renderBridgeCloud() {{
   const bcKeyOk = config.BRIDGE_CLOUD_API_KEY?.configured;
   const orKeyOk = config.OPENROUTER_MASTER_KEY?.configured;
-  const serverUrl = bcInfo?.server_url || 'https://your-server.tailXXXX.ts.net';
+  const fallbackHost = (window.location.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') ? window.location.hostname : 'your-server';
+  const serverUrl = bcInfo?.server_url || 'https://' + fallbackHost + '.tailXXXX.ts.net';
   const bcKeyMasked = config.BRIDGE_CLOUD_API_KEY?.masked || '';
 
   return `

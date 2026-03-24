@@ -153,7 +153,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
         except FileNotFoundError:
             return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), user_is_owner)
         session_started = instance.session_started
 
         model = getattr(instance, "model", None) or os.environ.get("FREECODE_MODEL", "")
@@ -171,31 +171,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
             cmd += ["--session", instance.session_id]
 
         # Build system prompt
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint
-                    + f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the edit or write tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context)
 
         if image_path:
             prompt = (
