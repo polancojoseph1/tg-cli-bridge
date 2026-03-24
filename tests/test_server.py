@@ -1,5 +1,4 @@
 import os
-import pytest
 from fastapi.testclient import TestClient
 
 # Minimal env so config imports don't crash
