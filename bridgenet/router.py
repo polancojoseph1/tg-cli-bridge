@@ -36,6 +36,7 @@ import logging
 import time
 from typing import Annotated
 
+from task_utils import run_task
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -127,31 +128,6 @@ def _require_owner_token(request: Request) -> None:
 # ── Shared task runner ────────────────────────────────────────────────────────
 
 
-async def _run_task(task: str, agent_id: str | None, context: str) -> str:
-    """Run a task using the configured runner, optionally via a named agent."""
-    prompt = task
-    if context:
-        prompt = f"Context: {context}\n\n{task}"
-
-    if agent_id:
-        try:
-            from agent_registry import get_agent
-            agent = get_agent(agent_id)
-            if agent and agent.system_prompt:
-                prompt = f"{agent.system_prompt}\n\n{prompt}"
-        except Exception as e:
-            logger.debug("Could not load agent '%s': %s", agent_id, e)
-
-    try:
-        from runners import create_runner
-        runner = create_runner()
-        result = await runner.run_query(prompt, timeout=120)
-        return result or "(no response)"
-    except Exception as e:
-        logger.error("_run_task failed: %s", e)
-        return f"Error running task: {e}"
-
-
 # ═════════════════════════════════════════════════════════════════════════════
 # /collab/* router — backward-compatible, logic unchanged from collab/router.py
 # ═════════════════════════════════════════════════════════════════════════════
@@ -241,7 +217,7 @@ async def collab_delegate(
         )
 
     start_ms = int(time.time() * 1000)
-    result = await _run_task(body.task, body.agent_id, body.context)
+    result = await run_task(body.task, body.agent_id, body.context)
     duration_ms = int(time.time() * 1000) - start_ms
 
     await append_event(
@@ -397,7 +373,7 @@ async def collab_borrow_message(
         raise HTTPException(status_code=403, detail="This session does not belong to you")
 
     borrow_mgr.touch_session(body.session_id)
-    result = await _run_task(body.text, agent_id=None, context="")
+    result = await run_task(body.text, agent_id=None, context="")
 
     await append_event(
         bot=session.bot,
@@ -586,7 +562,7 @@ async def bridgenet_task(
             rep.record_failure(source)
 
     start_ms = int(time.time() * 1000)
-    result = await _run_task(sanitized_content, task_req.agent_id, task_req.context)
+    result = await run_task(sanitized_content, task_req.agent_id, task_req.context)
     duration_ms = int(time.time() * 1000) - start_ms
 
     # Record reputation and credits
@@ -827,7 +803,7 @@ async def bridgenet_borrow_message(
         raise HTTPException(status_code=403, detail="This session does not belong to you")
 
     borrow_mgr.touch_session(body.session_id)
-    result = await _run_task(body.text, agent_id=None, context="")
+    result = await run_task(body.text, agent_id=None, context="")
 
     await append_event(
         bot=session.bot,
