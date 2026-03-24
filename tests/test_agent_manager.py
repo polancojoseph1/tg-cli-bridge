@@ -1,7 +1,5 @@
 """Tests for agent_manager.py"""
 import os
-import uuid
-from unittest.mock import Mock, patch
 
 # Minimal env so config imports don't crash
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1234567890:AAtesttoken")
