@@ -63,6 +63,11 @@ def spawn_agent(agent_id: str, instances: InstanceManager, owner_id: int = 0) ->
 
     inst = instances.create(agent.name, owner_id=owner_id, switch_active=False)
     inst.agent_id = agent_id
+
+    # Important: override the instance's session ID prefix so it has a separate
+    # Chroma memory context isolated from the user's main chat.
+    inst.session_id = f"agent_{agent.id}_{inst.id}_{owner_id}"
+
     inst.agent_system_prompt = _build_agent_system_prompt(agent)
     # Validate model string: only allow safe characters, max 128 chars
     model = agent.model or ""
