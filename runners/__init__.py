@@ -34,5 +34,8 @@ def create_runner() -> RunnerBase:
     elif CLI_RUNNER == "router":
         from runners.cli_router import CLIRouterRunner
         return CLIRouterRunner()
+    elif CLI_RUNNER == "openrouter":
+        from runners.openrouter import OpenRouterRunner
+        return OpenRouterRunner()
     else:
-        raise ValueError(f"Unknown CLI_RUNNER: '{CLI_RUNNER}'. Use: claude, gemini, codex, qwen, freecode, generic, free, or router")
+        raise ValueError(f"Unknown CLI_RUNNER: '{CLI_RUNNER}'. Use: claude, gemini, codex, qwen, freecode, generic, free, router, or openrouter")
