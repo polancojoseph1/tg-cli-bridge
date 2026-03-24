@@ -1583,6 +1583,27 @@ async def _extract_and_send_media(chat_id: int, text: str) -> list[str]:
     return sent
 
 
+
+def _make_progress_handler(chat_id: int, inst, user_id: int, proc_owner_id: int, is_ephemeral: bool = False):
+    _prefs = display_prefs.get_display_prefs(user_id)
+
+    async def on_progress(progress_text: str):
+        if is_ephemeral:
+            return  # ephemeral agents run silently — suppress all progress
+        if progress_text.startswith("<blockquote"):
+            if not _prefs["show_thoughts"]:
+                return  # user doesn't want to see thoughts
+            # HTML thinking block — send with HTML parse mode, minimal instance label
+            inst_label = f"[#{instances.display_num(inst.id, proc_owner_id)}: {inst.title}] " if len(instances.list_all(for_owner_id=proc_owner_id)) >= 2 else ""
+            await send_message(chat_id, f"{inst_label}{progress_text}", parse_mode="HTML")
+        else:
+            if not _prefs["show_tools"]:
+                return  # user doesn't want to see tool indicators
+            await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
+
+    return on_progress
+
+
 async def _process_message(chat_id: int, text: str, voice_reply: bool = False, instance=None, user_id: int = 0) -> None:
     # Check if the user is currently in a borrow session — proxy their message to the peer
     if COLLAB_ENABLED and collab_borrow is not None:
@@ -1630,21 +1651,7 @@ async def _process_message(chat_id: int, text: str, voice_reply: bool = False, i
     else:
         memory_context = await memory_handler.search_memory(text, user_id=user_id)
 
-    _prefs = display_prefs.get_display_prefs(user_id)
-
-    async def on_progress(progress_text: str):
-        if _is_ephemeral:
-            return  # ephemeral agents run silently — suppress all progress
-        if progress_text.startswith("<blockquote"):
-            if not _prefs["show_thoughts"]:
-                return  # user doesn't want to see thoughts
-            # HTML thinking block — send with HTML parse mode, minimal instance label
-            inst_label = f"[#{instances.display_num(inst.id, proc_owner_id)}: {inst.title}] " if len(instances.list_all(for_owner_id=proc_owner_id)) >= 2 else ""
-            await send_message(chat_id, f"{inst_label}{progress_text}", parse_mode="HTML")
-        else:
-            if not _prefs["show_tools"]:
-                return  # user doesn't want to see tool indicators
-            await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
+    on_progress = _make_progress_handler(chat_id, inst, user_id, proc_owner_id, is_ephemeral=_is_ephemeral)
 
     # --- Session store: mark this instance as actively processing ---
     if inst.needs_recovery:
@@ -1789,18 +1796,7 @@ async def _process_photo_message(chat_id: int, file_id: str, caption: str = "", 
 
     start = time.time()
 
-    _prefs = display_prefs.get_display_prefs(user_id)
-
-    async def on_progress(progress_text: str):
-        if progress_text.startswith("<blockquote"):
-            if not _prefs["show_thoughts"]:
-                return  # user doesn't want to see thoughts
-            inst_label = f"[#{instances.display_num(inst.id, proc_owner_id)}: {inst.title}] " if len(instances.list_all(for_owner_id=proc_owner_id)) >= 2 else ""
-            await send_message(chat_id, f"{inst_label}{progress_text}", parse_mode="HTML")
-        else:
-            if not _prefs["show_tools"]:
-                return  # user doesn't want to see tool indicators
-            await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
+    on_progress = _make_progress_handler(chat_id, inst, user_id, proc_owner_id)
 
     sender_name = USER_NAMES.get(user_id, "") if user_id else ""
     prefixed_caption = f"[{sender_name}]: {caption}" if sender_name else caption
@@ -1863,18 +1859,7 @@ async def _process_voice_message(chat_id: int, file_id: str, caption: str = "", 
 
     memory_context = await memory_handler.search_memory(raw_prompt, user_id=user_id)
 
-    _prefs = display_prefs.get_display_prefs(user_id)
-
-    async def on_progress(progress_text: str):
-        if progress_text.startswith("<blockquote"):
-            if not _prefs["show_thoughts"]:
-                return  # user doesn't want to see thoughts
-            inst_label = f"[#{instances.display_num(inst.id, proc_owner_id)}: {inst.title}] " if len(instances.list_all(for_owner_id=proc_owner_id)) >= 2 else ""
-            await send_message(chat_id, f"{inst_label}{progress_text}", parse_mode="HTML")
-        else:
-            if not _prefs["show_tools"]:
-                return  # user doesn't want to see tool indicators
-            await send_message(chat_id, _label(inst, progress_text, proc_owner_id, show_emoji=False), format_markdown=True)
+    on_progress = _make_progress_handler(chat_id, inst, user_id, proc_owner_id)
 
     _voice_is_owner = (user_id == ALLOWED_USER_ID)
     response = await runner.run(prompt, on_progress=on_progress, memory_context=memory_context, instance=inst, user_is_owner=_voice_is_owner)
@@ -3024,7 +3009,8 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             if not rows:
                 await send_message(chat_id, "No pending access requests.")
             else:
-                lines = ["<b>Pending requests:</b>"]
+                await send_message(chat_id, "<b>Pending requests:</b>", parse_mode="HTML")
+                coroutines = []
                 for r in rows:
                     display = r["first_name"] or ""
                     if r["username"]:
@@ -3034,11 +3020,12 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                         {"text": "✅ Approve", "callback_data": f"approve_user:{r['user_id']}"},
                         {"text": "❌ Deny",    "callback_data": f"deny_user:{r['user_id']}"},
                     ]]
-                    await send_inline_keyboard(
+                    coroutines.append(send_inline_keyboard(
                         chat_id,
                         f"<b>{display}</b> (ID: <code>{r['user_id']}</code>)",
                         buttons,
-                    )
+                    ))
+                await asyncio.gather(*coroutines)
 
         else:
             await send_message(
