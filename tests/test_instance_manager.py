@@ -1,4 +1,3 @@
-import pytest
 from instance_manager import InstanceManager
 
 def test_switch_by_display_number_success():
@@ -94,7 +93,7 @@ def test_switch_owner_isolation():
     user_instance = manager.create("user_inst", owner_id=owner_id)
 
     # Create another instance for user 123 so we have something to switch from/to
-    user_instance_2 = manager.create("user_inst_2", owner_id=owner_id)
+    manager.create("user_inst_2", owner_id=owner_id)
 
     # User 123 switches back to their first instance ("user_inst", display number 1)
     switched_instance = manager.switch("1", owner_id=owner_id)
