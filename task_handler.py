@@ -1,4 +1,4 @@
-"""Task list manager for MEMORY_DIR/Goals/TODOS.md.
+"""Task list manager for MEMORY_DIR/Goals/TASKS.md.
 
 Simple numbered task list shared across bots. Tasks are added via /task add
 and removed via /task done. The file is auto-indexed by ChromaDB on startup
@@ -19,7 +19,7 @@ from pathlib import Path
 logger = logging.getLogger("bridge.tasks")
 
 from config import MEMORY_DIR  # noqa: E402
-TASK_FILE = Path(MEMORY_DIR) / "Goals" / "TODOS.md"
+TASK_FILE = Path(MEMORY_DIR) / "Goals" / "TASKS.md"
 
 _HEADER = (
     "# Current Tasks\n\n"
@@ -35,14 +35,14 @@ _CHECKBOX_RE = re.compile(r"^-\s+\[([ xX~!])\]\s+(.+)$")
 
 
 def _ensure_file() -> None:
-    """Create TODOS.md with header if it doesn't exist."""
+    """Create TASKS.md with header if it doesn't exist."""
     TASK_FILE.parent.mkdir(parents=True, exist_ok=True)
     if not TASK_FILE.exists():
         TASK_FILE.write_text(_HEADER, encoding="utf-8")
 
 
 def _parse_tasks() -> list[dict]:
-    """Parse TODOS.md and return list of {number, status, timestamp, text}.
+    """Parse TASKS.md and return list of {number, status, timestamp, text}.
 
     Handles both numbered format and markdown checkbox format.
     """
@@ -78,7 +78,7 @@ def _parse_tasks() -> list[dict]:
 
 
 def _write_tasks(tasks: list[dict]) -> None:
-    """Rewrite TODOS.md with renumbered tasks and status markers."""
+    """Rewrite TASKS.md with renumbered tasks and status markers."""
     lines = [_HEADER]
     for i, task in enumerate(tasks, 1):
         status = task.get("status", " ")
