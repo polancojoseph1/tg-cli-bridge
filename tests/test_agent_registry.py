@@ -1,4 +1,11 @@
+import os
 import pytest
+from unittest.mock import patch
+
+# Set necessary environment variables before importing module
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1234567890:AAtesttoken")
+os.environ.setdefault("ALLOWED_USER_ID", "12345678")
+os.environ.setdefault("CLI_RUNNER", "generic")
 
 import agent_registry
 from agent_registry import (
@@ -9,21 +16,83 @@ from agent_registry import (
 )
 
 
-@pytest.fixture(autouse=True)
-def mock_agents_db(tmp_path, monkeypatch):
-    """Override the database path to use a temporary file for testing."""
-    db_path = tmp_path / "test_agents.db"
-    monkeypatch.setattr(agent_registry, "AGENTS_DB", str(db_path))
-
-    # Initialize the database schema for the test
-    # By calling _get_conn(), it will create the tables automatically
-    with agent_registry._get_conn():
-        pass
-
-    return str(db_path)
+@pytest.fixture
+def clean_registry(tmp_path):
+    # Patch the db path to a temp db for isolation
+    db_path = str(tmp_path / "test_agents.db")
+    with patch("agent_registry.AGENTS_DB", db_path):
+        # The first time _get_conn is called in each test, it will connect
+        # to this new temp db and run the _SCHEMA creation automatically.
+        yield db_path
 
 
-def test_create_agent_happy_path():
+# --- resolve_agent tests ---
+
+def test_resolve_agent_exact_id(clean_registry):
+    agent_registry.create_agent(agent_id="test_agent_1", name="Alpha Bot")
+    agent_registry.create_agent(agent_id="test_agent_2", name="Beta Bot")
+
+    resolved = agent_registry.resolve_agent("test_agent_1")
+    assert resolved is not None
+    assert resolved.id == "test_agent_1"
+    assert resolved.name == "Alpha Bot"
+
+def test_resolve_agent_exact_name(clean_registry):
+    agent_registry.create_agent(agent_id="test_agent_1", name="Alpha Bot")
+    agent_registry.create_agent(agent_id="test_agent_2", name="Beta Bot")
+
+    resolved = agent_registry.resolve_agent("Alpha Bot")
+    assert resolved is not None
+    assert resolved.id == "test_agent_1"
+    assert resolved.name == "Alpha Bot"
+
+def test_resolve_agent_partial_name(clean_registry):
+    agent_registry.create_agent(agent_id="test_agent_1", name="Alpha Bot")
+    agent_registry.create_agent(agent_id="test_agent_2", name="Beta Bot")
+
+    resolved = agent_registry.resolve_agent("lph")
+    assert resolved is not None
+    assert resolved.id == "test_agent_1"
+
+def test_resolve_agent_case_insensitive_name(clean_registry):
+    agent_registry.create_agent(agent_id="test_agent_1", name="Alpha Bot")
+
+    resolved = agent_registry.resolve_agent("ALPHA BOT")
+    assert resolved is not None
+    assert resolved.id == "test_agent_1"
+
+def test_resolve_agent_not_found(clean_registry):
+    agent_registry.create_agent(agent_id="test_agent_1", name="Alpha Bot")
+
+    resolved = agent_registry.resolve_agent("unknown")
+    assert resolved is None
+
+def test_resolve_agent_id_preferred_over_name(clean_registry):
+    # Create one agent with id "alpha"
+    agent_registry.create_agent(agent_id="alpha", name="Beta Bot")
+    # Create another agent with name "alpha"
+    agent_registry.create_agent(agent_id="beta", name="Alpha Bot")
+
+    # Resolving "alpha" should return the one with id="alpha" (exact ID matches first)
+    resolved = agent_registry.resolve_agent("alpha")
+    assert resolved is not None
+    assert resolved.id == "alpha"
+    assert resolved.name == "Beta Bot"
+
+def test_resolve_agent_case_insensitive_id(clean_registry):
+    # Try creating an agent with an uppercase ID to see if `get_agent_by_name` catches it
+    # note: `get_agent` does exact matching, but `get_agent_by_name` also searches over row["id"].lower()
+    agent_registry.create_agent(agent_id="TEST_ID", name="Gamma Bot")
+
+    # Exact ID won't match "test_id", but partial name match should catch the lowercased ID
+    resolved = agent_registry.resolve_agent("test_id")
+    assert resolved is not None
+    assert resolved.id == "TEST_ID"
+
+
+# --- create_agent tests ---
+
+def test_create_agent_happy_path(clean_registry):
     """Test creating an agent with all fields provided."""
     agent_id = "test_agent_1"
     name = "Test Agent 1"
@@ -66,7 +135,7 @@ def test_create_agent_happy_path():
     assert db_agent.collaborators == collaborators
 
 
-def test_create_agent_defaults():
+def test_create_agent_defaults(clean_registry):
     """Test creating an agent with minimal fields to check defaults."""
     agent_id = "test_agent_2"
     name = "Test Agent 2"
@@ -96,7 +165,7 @@ def test_create_agent_defaults():
     assert db_agent.collaborators == []
 
 
-def test_create_agent_duplicate_id_raises_value_error():
+def test_create_agent_duplicate_id_raises_value_error(clean_registry):
     """Test creating an agent with an ID that already exists raises a ValueError."""
     agent_id = "test_agent_3"
     name = "Test Agent 3"
