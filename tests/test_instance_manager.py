@@ -1,4 +1,3 @@
-import asyncio
 import pytest
 from instance_manager import Instance
 
