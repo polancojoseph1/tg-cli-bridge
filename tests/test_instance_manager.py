@@ -1,4 +1,3 @@
-import pytest
 from instance_manager import InstanceManager, Instance
 
 class TestEnsurePinned:
