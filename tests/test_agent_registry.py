@@ -2,7 +2,7 @@ import sqlite3
 import pytest
 from unittest.mock import patch
 
-from agent_registry import create_skill, get_skill, delete_skill, SkillDefinition
+from agent_registry import create_skill, get_skill, SkillDefinition
 
 # Use an in-memory DB for tests
 @pytest.fixture(autouse=True)
