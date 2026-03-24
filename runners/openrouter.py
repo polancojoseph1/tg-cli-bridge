@@ -26,6 +26,80 @@ _last_access: dict[str, float] = {}
 # Cleanup conversations older than 2 hours
 _HISTORY_TTL = 7200
 
+from runners.base import RunnerBase
+import os
+
+class OpenRouterRunner(RunnerBase):
+    name = "openrouter"
+
+    async def run(
+        self,
+        message: str,
+        instance,
+        on_progress: Callable[[str], Awaitable[None]] | None = None,
+        image_path: str | list | None = None,
+        memory_context: str = "",
+        user_is_owner: bool = True,
+    ) -> str:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            return "❌ Error: OPENROUTER_API_KEY not set in .env"
+
+        # Determine model
+        model = getattr(instance, "model", None) or os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+
+        # Session ID management
+        if not instance.session_id:
+            import uuid
+            instance.session_id = str(uuid.uuid4())
+            instance.session_started = True
+
+        system_prompt = instance.agent_system_prompt or getattr(self, "system_prompt", None)
+        if memory_context:
+            system_prompt = (system_prompt + "\n\n" + memory_context) if system_prompt else memory_context
+
+        # Image support (basic)
+        if image_path:
+            message = f"[Image provided at {image_path}]\n\n{message}"
+
+        try:
+            full_response = await run(
+                message=message,
+                model=model,
+                api_key=api_key,
+                conversation_id=instance.session_id,
+                system_prompt=system_prompt,
+                on_progress=on_progress,
+            )
+            return full_response
+        except Exception as e:
+            return f"❌ Error from OpenRouter: {e}"
+
+    async def run_query(self, prompt: str, timeout: int = 120) -> str:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY not set in .env")
+        model = os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash")
+        return await run_query(
+            prompt=prompt,
+            model=model,
+            api_key=api_key,
+            timeout=timeout
+        )
+
+    async def kill_all(self) -> int:
+        return 0
+
+    async def stop(self, instance) -> None:
+        pass
+
+    def new_session(self, instance) -> None:
+        if instance.session_id:
+            clear_history(instance.session_id)
+        import uuid
+        instance.session_id = str(uuid.uuid4())
+        instance.session_started = True
+
 
 def _cleanup_stale():
     """Remove conversations not accessed in the last 2 hours."""

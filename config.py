@@ -187,9 +187,9 @@ def validate_config() -> list[str]:
         errors.append("TELEGRAM_BOT_TOKEN is not set")
     if not ALLOWED_USER_IDS:
         errors.append("ALLOWED_USER_ID is not set")
-    if CLI_RUNNER not in ("claude", "gemini", "codex", "qwen", "opencode", "freecode", "generic", "free", "router"):
-        errors.append(f"CLI_RUNNER='{CLI_RUNNER}' — must be claude, gemini, codex, qwen, freecode, generic, free, or router")
-    if CLI_RUNNER not in ("generic", "free", "router") and not is_cli_available():
+    if CLI_RUNNER not in ("claude", "gemini", "codex", "qwen", "opencode", "freecode", "generic", "free", "router", "openrouter"):
+        errors.append(f"CLI_RUNNER='{CLI_RUNNER}' — must be claude, gemini, codex, qwen, freecode, generic, free, router, or openrouter")
+    if CLI_RUNNER not in ("generic", "free", "router", "openrouter") and not is_cli_available():
         errors.append(
             f"CLI binary '{CLI_COMMAND}' not found in PATH — "
             f"install it before starting the bot"
