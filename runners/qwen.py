@@ -24,13 +24,6 @@ class QwenRunner(RunnerBase):
     name = "qwen"
     cli_command = "qwen"
 
-    def __init__(self):
-        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
-        self.timeout = CLI_TIMEOUT
-        self.memory_dir = MEMORY_DIR
-        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
-        self.memory_enabled = MEMORY_ENABLED
-
     def new_session(self, instance) -> None:
         instance.session_id = str(uuid.uuid4())
         instance.session_started = False

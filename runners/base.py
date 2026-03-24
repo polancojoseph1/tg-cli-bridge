@@ -35,6 +35,13 @@ class RunnerBase(ABC):
     name: str = ""              # e.g. "claude", "gemini", "codex"
     cli_command: str = ""       # binary name to find in PATH (e.g. "claude")
 
+    def __init__(self):
+        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
+        self.timeout = CLI_TIMEOUT
+        self.memory_dir = MEMORY_DIR
+        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
+        self.memory_enabled = MEMORY_ENABLED
+
     @staticmethod
     def _format_thinking(text: str, max_chars: int = 3000) -> str:
         """Format a full thinking block for Telegram expandable blockquote.
