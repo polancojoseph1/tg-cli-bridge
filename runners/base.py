@@ -35,6 +35,13 @@ class RunnerBase(ABC):
     name: str = ""              # e.g. "claude", "gemini", "codex"
     cli_command: str = ""       # binary name to find in PATH (e.g. "claude")
 
+    def __init__(self):
+        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
+        self.timeout = CLI_TIMEOUT
+        self.memory_dir = MEMORY_DIR
+        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
+        self.memory_enabled = MEMORY_ENABLED
+
     @staticmethod
     def _format_thinking(text: str, max_chars: int = 3000) -> str:
         """Format a full thinking block for Telegram expandable blockquote.
@@ -115,16 +122,30 @@ class RunnerBase(ABC):
             The response text.
         """
 
-    @abstractmethod
     async def stop(self, instance: Any) -> bool:
         """Stop the running process for a specific instance.
 
         Returns True if a process was actually stopped.
         """
+        proc = getattr(instance, "process", None)
+        if proc is not None and proc.returncode is None:
+            instance.was_stopped = True
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            instance.process = None
+            return True
+        return False
 
     @abstractmethod
     def new_session(self, instance: Any) -> None:
         """Reset session state so the next message starts a fresh conversation."""
+
+    def _clear_subprocess_info(self, instance: Any) -> None:
+        """Clear subprocess tracking info from the instance."""
+        self._clear_subprocess_info(instance)
 
     async def stop_all(self, instances: list) -> int:
         """Stop processes for all given instances. Returns count stopped."""
@@ -172,6 +193,28 @@ class RunnerBase(ABC):
         """Return the log file path for a specific instance."""
         os.makedirs(_LOG_DIR, exist_ok=True)
         return os.path.join(_LOG_DIR, f"{bot_name}_{chat_id}_{instance_id}.log")
+
+    @staticmethod
+    async def read_with_timeout(proc: asyncio.subprocess.Process, timeout: float) -> tuple[bytes, bytes]:
+        """Read from a subprocess with a timeout, killing it if it times out.
+
+        Returns:
+            A tuple of (stdout_data, stderr_data).
+        Raises:
+            asyncio.TimeoutError: If the process times out.
+        """
+        async def _read():
+            return await proc.communicate()
+
+        try:
+            return await asyncio.wait_for(_read(), timeout=timeout)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            raise
 
     @staticmethod
     def get_pid_start_time(pid: int) -> str:
@@ -241,6 +284,25 @@ class RunnerBase(ABC):
         finally:
             f.close()
 
+    @staticmethod
+    def format_query_result(
+        text_parts: list[str] | None,
+        stdout_data: bytes | None,
+        stderr_data: bytes,
+        join_char: str = "",
+    ) -> str:
+        """Format the final result string from a run_query CLI response."""
+        if text_parts:
+            return join_char.join(text_parts)
+        if stdout_data:
+            result = stdout_data.decode(errors="replace").strip()
+            if result:
+                return result
+        err = stderr_data.decode(errors="replace").strip()
+        if err:
+            return f"[stderr] {err}"
+        return "(no response)"
+
     def format_tool_progress(self, name: str, params: dict) -> str:
         """Format a tool call into a human-readable progress string.
 
@@ -278,3 +340,21 @@ class RunnerBase(ABC):
         elif name:
             return f"\U0001f527 {name}"
         return ""
+
+    @staticmethod
+    def start_keepalive_task(on_progress: Callable[[str], Awaitable[None]] | None, last_progress_time: list[float]) -> asyncio.Task:
+        """Start a background task to send a heartbeat when no progress is sent for a while.
+
+        last_progress_time must be a single-element list containing the time.monotonic() float.
+        """
+        _KEEPALIVE_INTERVAL = 180  # seconds between "still working" pings
+
+        async def _keepalive():
+            import time
+            while True:
+                await asyncio.sleep(30)
+                if on_progress and time.monotonic() - last_progress_time[0] >= _KEEPALIVE_INTERVAL:
+                    last_progress_time[0] = time.monotonic()
+                    await on_progress("⏳ Still working...")
+
+        return asyncio.create_task(_keepalive())
