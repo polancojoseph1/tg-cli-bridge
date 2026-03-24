@@ -7,7 +7,6 @@ No session management, no streaming, plain text output.
 import asyncio
 import logging
 import os
-import re
 from typing import Callable, Awaitable
 
 from runners.base import RunnerBase
