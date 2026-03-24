@@ -15,6 +15,7 @@ import logging
 import time
 from typing import Annotated
 
+from task_utils import run_task
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -165,7 +166,7 @@ async def delegate(
     start_ms = int(time.time() * 1000)
 
     # Run the task via the runner
-    result = await _run_task(body.task, body.agent_id, body.context)
+    result = await run_task(body.task, body.agent_id, body.context)
 
     duration_ms = int(time.time() * 1000) - start_ms
 
@@ -187,37 +188,6 @@ async def delegate(
         "agent_id": body.agent_id,
         "duration_ms": duration_ms,
     }
-
-
-async def _run_task(task: str, agent_id: str | None, context: str) -> str:
-    """Run a task using the configured runner, optionally via a named agent.
-
-    Falls back gracefully if agent_id is unknown or runner is unavailable.
-    """
-    prompt = task
-    if context:
-        prompt = f"Context: {context}\n\n{task}"
-
-    # If a specific agent is requested, inject its system prompt
-    system_prompt: str | None = None
-    if agent_id:
-        try:
-            from agent_registry import get_agent
-            agent = get_agent(agent_id)
-            if agent and agent.system_prompt:
-                system_prompt = agent.system_prompt
-                prompt = f"{system_prompt}\n\n{prompt}"
-        except Exception as e:
-            logger.debug("Could not load agent '%s': %s", agent_id, e)
-
-    try:
-        from runners import create_runner
-        runner = create_runner()
-        result = await runner.run_query(prompt, timeout=120)
-        return result or "(no response)"
-    except Exception as e:
-        logger.error("_run_task failed: %s", e)
-        return f"Error running task: {e}"
 
 
 # ── GET /collab/memory/search ────────────────────────────────────────────────
@@ -396,7 +366,7 @@ async def borrow_message(
 
     borrow_mgr.touch_session(body.session_id)
 
-    result = await _run_task(body.text, agent_id=None, context="")
+    result = await run_task(body.text, agent_id=None, context="")
 
     await append_event(
         bot=session.bot,

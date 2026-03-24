@@ -24,29 +24,9 @@ class QwenRunner(RunnerBase):
     name = "qwen"
     cli_command = "qwen"
 
-    def __init__(self):
-        from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
-        self.timeout = CLI_TIMEOUT
-        self.memory_dir = MEMORY_DIR
-        self.system_prompt = (CLI_SYSTEM_PROMPT.replace("{MEMORY_DIR}", MEMORY_DIR).replace("{OWNER_NAME}", USER_NAME or "the user") if CLI_SYSTEM_PROMPT else CLI_SYSTEM_PROMPT)
-        self.memory_enabled = MEMORY_ENABLED
-
     def new_session(self, instance) -> None:
         instance.session_id = str(uuid.uuid4())
         instance.session_started = False
-
-    async def stop(self, instance) -> bool:
-        proc = instance.process
-        if proc is not None and proc.returncode is None:
-            instance.was_stopped = True
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
-            instance.process = None
-            return True
-        return False
 
     async def kill_all(self) -> int:
         return self._kill_processes("qwen -p")
@@ -83,7 +63,7 @@ class QwenRunner(RunnerBase):
                 pass
             return '{"error": "timed out"}'
 
-        return self.decode_cli_output(stdout_data, stderr_data)
+        return self.format_query_result(None, stdout_data, stderr_data)
 
     async def run(
         self,
@@ -261,9 +241,7 @@ class QwenRunner(RunnerBase):
             except ProcessLookupError:
                 pass
             instance.process = None
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\u23f0 Qwen took too long to respond (timed out)."
         finally:
             if system_prompt_file:
@@ -276,9 +254,7 @@ class QwenRunner(RunnerBase):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
 
         if proc.returncode == 0:
@@ -288,9 +264,7 @@ class QwenRunner(RunnerBase):
                 instance.last_output_tokens = _usage.get("output_tokens", 0)
                 instance.last_total_tokens = _usage.get("total_tokens", 0)
             # Clear subprocess tracking — process finished cleanly
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
 
         if proc.returncode != 0:
             logger.error("qwen exited %d (see log: %s)", proc.returncode, log_path)
@@ -299,9 +273,7 @@ class QwenRunner(RunnerBase):
                     _log_tail = _f.read()[-2000:]
             except OSError:
                 _log_tail = ""
-            instance.subprocess_pid = 0
-            instance.subprocess_log_file = ""
-            instance.subprocess_start_time = ""
+            self._clear_subprocess_info(instance)
             _log_lower = _log_tail.lower()
             if "auth" in _log_lower or "login" in _log_lower:
                 return "\u274c Qwen auth error. Run `qwen` in a terminal to re-authenticate."
