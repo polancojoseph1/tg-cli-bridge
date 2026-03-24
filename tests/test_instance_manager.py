@@ -1,4 +1,3 @@
-import pytest
 from instance_manager import InstanceManager, Instance
 
 def test_ensure_pinned_creates_new():
