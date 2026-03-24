@@ -419,8 +419,8 @@ async def restart_wa_bridge():
     auth_dir = os.path.expanduser("~/.jefe/wa-auth")
     try:
         subprocess.run(["launchctl", "unload", plist], capture_output=True)
-        import time
-        time.sleep(1)
+        import asyncio
+        await asyncio.sleep(1)
         # Clear stale pairing code so poll detects the new one
         for f in ["pairing_code.txt", "pairing_code.ready"]:
             p = os.path.join(auth_dir, f)
