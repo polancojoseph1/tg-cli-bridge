@@ -1,0 +1,16 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+dist
+build
+.git
+.DS_Store
+*.db
+*.log
+*.err.log
+sessions.db
+agents.db

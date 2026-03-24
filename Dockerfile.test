@@ -3,13 +3,8 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir \
-    httpx \
-    fastapi \
-    uvicorn \
-    python-dotenv \
-    pytest \
-    pytest-asyncio
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir pytest pytest-asyncio
 
 COPY . .
 
@@ -17,5 +12,6 @@ ENV TELEGRAM_BOT_TOKEN=test:token
 ENV ALLOWED_USER_ID=12345678
 ENV CLI_RUNNER=generic
 ENV CLI_COMMAND=echo
+ENV ENV_FILE=/dev/null
 
 CMD ["pytest", "tests/", "-v", "--tb=short"]
