@@ -69,11 +69,7 @@ class GeminiRunner(RunnerBase):
             except json.JSONDecodeError:
                 continue
 
-<<<<<<< HEAD
-        return self._format_query_response(text_parts, stderr_data)
-=======
         return self.format_query_result(text_parts, None, stderr_data)
->>>>>>> main
 
     async def run(
         self,

@@ -98,11 +98,7 @@ class FreeCodeBaseRunner(RunnerBase):
                 if err_msg:
                     return f"[error] {err_msg}"
 
-<<<<<<< HEAD
-        return self._format_query_response(text_parts, stderr_data, joiner="\n\n")
-=======
         return self.format_query_result(text_parts, None, stderr_data, join_char="\n\n")
->>>>>>> main
 
     async def run(
         self,

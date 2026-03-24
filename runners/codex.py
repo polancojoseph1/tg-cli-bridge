@@ -76,11 +76,7 @@ class CodexRunner(RunnerBase):
             except json.JSONDecodeError:
                 continue
 
-<<<<<<< HEAD
-        return self._format_query_response(text_parts, stderr_data)
-=======
         return self.format_query_result(text_parts, None, stderr_data)
->>>>>>> main
 
     def _format_codex_progress(self, item: dict) -> str:
         """Format a codex JSONL item into a progress string."""
