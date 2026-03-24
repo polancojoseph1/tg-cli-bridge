@@ -401,7 +401,7 @@ async def wa_pairing_code():
             r = await c.get(f"{WA_RUNNER_URL}/wa/pairing-code")
             # The bridgebot endpoint returns plain text; parse it out
             text = r.text.strip()
-            # Extract just the code (format: XXXX-XXXX)
+            # Match the code in XXXX-XXXX format
             import re
             match = re.search(r'\b([A-Z0-9]{4}-[A-Z0-9]{4})\b', text)
             if match:
