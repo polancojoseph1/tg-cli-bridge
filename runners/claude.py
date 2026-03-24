@@ -85,21 +85,9 @@ class ClaudeRunner(RunnerBase):
         except OSError as exc:
             return f'{{"error": "Failed to start claude: {exc}"}}'
 
-        stdout_data = b""
-        stderr_data = b""
-
-        async def _read():
-            nonlocal stdout_data, stderr_data
-            stdout_data, stderr_data = await proc.communicate()
-
         try:
-            await asyncio.wait_for(_read(), timeout=float(timeout))
+            stdout_data, stderr_data = await RunnerBase.wait_for_process(proc, float(timeout))
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
             return '{"error": "timed out"}'
 
         result = stdout_data.decode(errors="replace").strip()

@@ -143,6 +143,22 @@ class RunnerBase(ABC):
         return 0
 
     @staticmethod
+    async def wait_for_process(proc: asyncio.subprocess.Process, timeout: float) -> tuple[bytes, bytes]:
+        """Wait for a process to communicate with a timeout, killing it on timeout.
+
+        Raises asyncio.TimeoutError if the timeout is reached.
+        """
+        try:
+            return await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
+            raise
+
+    @staticmethod
     def _kill_processes(pattern: str) -> int:
         """Kill processes matching pattern. Cross-platform (Windows + Unix).
 

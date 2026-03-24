@@ -63,15 +63,8 @@ class GenericRunner(RunnerBase):
             return f'{{"error": "Failed to start {self.cli_command}: {exc}"}}'
 
         try:
-            stdout_data, stderr_data = await asyncio.wait_for(
-                proc.communicate(), timeout=float(timeout)
-            )
+            stdout_data, stderr_data = await RunnerBase.wait_for_process(proc, float(timeout))
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
             return '{"error": "timed out"}'
 
         result = stdout_data.decode(errors="replace").strip()
@@ -124,15 +117,8 @@ class GenericRunner(RunnerBase):
             return f"\u274c Error starting {self.cli_command}: {exc}"
 
         try:
-            stdout_data, stderr_data = await asyncio.wait_for(
-                proc.communicate(), timeout=self.timeout
-            )
+            stdout_data, stderr_data = await RunnerBase.wait_for_process(proc, self.timeout)
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
             instance.process = None
             return f"\u23f0 {self.cli_command} took too long to respond (timed out)."
 
