@@ -159,7 +159,7 @@ class FreeCodeBaseRunner(RunnerBase):
         cmd = [binary, "run", "--format", "json"]
 
         # Custom fork: pass --steps if FREECODE_MAX_STEPS is set
-        max_steps = os.environ.get("FREECODE_MAX_STEPS")
+        max_steps = os.environ.get("FREECODE_MAX_STEPS") or os.environ.get("OPENCODE_MAX_STEPS")
         if max_steps:
             cmd += ["--steps", max_steps]
 
@@ -409,7 +409,7 @@ class FreeCodeBaseRunner(RunnerBase):
         # Corrupt session: tool call / response mismatch rejected by Mistral
         if _session_corrupt:
             self.new_session(instance)
-            return "\u26a0\ufe0f Session had corrupt tool call history (Mistral rejected it). Session has been reset \u2014 please resend your message."
+            return "\u26a0\ufe0f Session had corrupt tool call history. Session has been reset \u2014 please resend your message."
 
         if _pending_text:
             return _pending_text
