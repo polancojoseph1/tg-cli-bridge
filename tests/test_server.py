@@ -1,7 +1,6 @@
 import os
 import asyncio
 from unittest.mock import AsyncMock
-from contextlib import contextmanager
 
 # Minimal env so config imports don't crash
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1234567890:AAtesttoken")
@@ -10,7 +9,6 @@ os.environ.setdefault("CLI_RUNNER", "generic")
 os.environ.setdefault("CLI_COMMAND", "echo")
 os.environ.setdefault("ENV_FILE", "/dev/null")
 
-import pytest
 from fastapi.testclient import TestClient
 
 import server
