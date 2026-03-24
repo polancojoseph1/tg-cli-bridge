@@ -222,19 +222,28 @@ def update_agent(agent_id: str, **fields) -> AgentDefinition | None:
     if not updates:
         return agent
 
-    updates["updated_at"] = time.time()
-
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = []
+    # Apply updates to the retrieved object
     for k, v in updates.items():
-        if k in ("skills", "collaborators") and isinstance(v, list):
-            values.append(json.dumps(v))
-        else:
-            values.append(v)
-    values.append(agent_id)
+        setattr(agent, k, v)
+
+    agent.updated_at = time.time()
 
     with _get_conn() as conn:
-        conn.execute(f"UPDATE agents SET {set_clause} WHERE id = ?", values)
+        conn.execute(
+            """UPDATE agents SET
+               name = ?, agent_type = ?, system_prompt = ?, skills = ?, model = ?,
+               collaborators = ?, updated_at = ?, proactive = ?,
+               proactive_schedule = ?, proactive_task = ?, ephemeral = ?
+               WHERE id = ?""",
+            (
+                agent.name, agent.agent_type, agent.system_prompt,
+                json.dumps(agent.skills), agent.model,
+                json.dumps(agent.collaborators), agent.updated_at,
+                int(agent.proactive), agent.proactive_schedule,
+                agent.proactive_task, int(agent.ephemeral),
+                agent_id
+            )
+        )
 
     logger.info("Updated agent %s: %s", agent_id, list(updates.keys()))
     return get_agent(agent_id)
@@ -308,12 +317,17 @@ def update_skill(skill_id: str, **fields) -> SkillDefinition | None:
     if not updates:
         return skill
 
-    updates["updated_at"] = time.time()
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [skill_id]
+    # Apply updates to the retrieved object
+    for k, v in updates.items():
+        setattr(skill, k, v)
+
+    skill.updated_at = time.time()
 
     with _get_conn() as conn:
-        conn.execute(f"UPDATE skills SET {set_clause} WHERE id = ?", values)
+        conn.execute(
+            "UPDATE skills SET description = ?, prompt = ?, updated_at = ? WHERE id = ?",
+            (skill.description, skill.prompt, skill.updated_at, skill_id)
+        )
 
     logger.info("Updated skill %s: %s", skill_id, list(updates.keys()))
     return get_skill(skill_id)
