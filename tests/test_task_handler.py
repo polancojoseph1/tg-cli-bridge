@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 # Setup dummy environment to avoid config import errors
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "dummy_token")
@@ -7,7 +6,6 @@ os.environ.setdefault("ALLOWED_USER_ID", "123456")
 os.environ.setdefault("CLI_RUNNER", "dummy")
 os.environ.setdefault("CLI_COMMAND", "dummy")
 
-import pytest
 
 import task_handler
 
