@@ -1,6 +1,11 @@
 """Tests for server.py"""
 import os
 import sys
+import asyncio
+import json
+import hashlib
+import hmac
+from unittest.mock import patch, AsyncMock
 
 # Add the project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
@@ -12,18 +17,79 @@ os.environ.setdefault("CLI_RUNNER", "generic")
 os.environ.setdefault("CLI_COMMAND", "echo")
 os.environ.setdefault("ENV_FILE", "/dev/null")
 
-import json
-import hashlib
-import hmac
-from unittest.mock import patch, AsyncMock
-
 from fastapi.testclient import TestClient
 
-
+import server
 from server import app
+
+# Disable rate limiting during tests so multiple hits to /query don't trigger 429
+server.app.dependency_overrides[server._limiter] = lambda: None
+server._limiter.enabled = False
 
 client = TestClient(app)
 
+
+# --- direct_query tests ---
+
+def test_direct_query_no_auth():
+    server.INTERNAL_API_KEY = "test-key"
+    response = client.post("/query", json={"prompt": "hello"})
+    assert response.status_code == 401
+    assert response.json() == {"ok": False, "error": "Unauthorized"}
+
+def test_direct_query_invalid_auth():
+    server.INTERNAL_API_KEY = "test-key"
+    response = client.post(
+        "/query",
+        json={"prompt": "hello"},
+        headers={"X-API-Key": "wrong-key"}
+    )
+    assert response.status_code == 401
+    assert response.json() == {"ok": False, "error": "Unauthorized"}
+
+def test_direct_query_success():
+    server.INTERNAL_API_KEY = "test-key"
+    server.runner.run_query = AsyncMock(return_value="mocked response")
+    response = client.post(
+        "/query",
+        json={"prompt": "hello"},
+        headers={"X-API-Key": "test-key"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "response": "mocked response"}
+
+def test_direct_query_timeout():
+    server.INTERNAL_API_KEY = "test-key"
+    server.runner.run_query = AsyncMock(side_effect=asyncio.TimeoutError())
+    response = client.post(
+        "/query",
+        json={"prompt": "hello", "timeout_secs": 120},
+        headers={"X-API-Key": "test-key"}
+    )
+    assert response.status_code == 504
+    assert response.json() == {
+        "ok": False,
+        "error": "AI response timed out after 120s",
+        "response": ""
+    }
+
+def test_direct_query_general_error():
+    server.INTERNAL_API_KEY = "test-key"
+    server.runner.run_query = AsyncMock(side_effect=Exception("boom"))
+    response = client.post(
+        "/query",
+        json={"prompt": "hello"},
+        headers={"X-API-Key": "test-key"}
+    )
+    assert response.status_code == 500
+    assert response.json() == {
+        "ok": False,
+        "error": "boom",
+        "response": ""
+    }
+
+
+# --- trigger_webhook tests ---
 
 # A dummy TriggerDefinition-like object to mock trigger lookups
 class MockTrigger:
