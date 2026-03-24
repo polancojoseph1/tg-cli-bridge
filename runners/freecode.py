@@ -54,23 +54,14 @@ class FreeCodeBaseRunner(RunnerBase):
         except FileNotFoundError:
             return '{"error": "freecode CLI not found"}'
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), True)
         cmd = [binary, "run", "--format", "json", prompt]
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-        except OSError as exc:
-            return f'{{"error": "Failed to start freecode: {exc}"}}'
-
-        try:
-            stdout_data, stderr_data = await RunnerBase.wait_for_process(proc, float(timeout))
-        except asyncio.TimeoutError:
-            return '{"error": "timed out"}'
+        stdout_data, stderr_data, err_msg = await self._run_cmd_with_timeout(
+            cmd, float(timeout), env, "freecode"
+        )
+        if err_msg:
+            return err_msg
 
         # Parse NDJSON output — collect all text events
         text_parts = []
@@ -111,7 +102,7 @@ class FreeCodeBaseRunner(RunnerBase):
         except FileNotFoundError:
             return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
 
-        env = dict(os.environ)
+        env = self.build_env(dict(os.environ), user_is_owner)
         session_started = instance.session_started
 
         # Per-instance OpenRouter credentials (Bridge Cloud per-user keys)
@@ -127,7 +118,7 @@ class FreeCodeBaseRunner(RunnerBase):
         cmd = [binary, "run", "--format", "json"]
 
         # Custom fork: pass --steps if FREECODE_MAX_STEPS is set
-        max_steps = os.environ.get("FREECODE_MAX_STEPS")
+        max_steps = os.environ.get("FREECODE_MAX_STEPS") or os.environ.get("OPENCODE_MAX_STEPS")
         if max_steps:
             cmd += ["--steps", max_steps]
 
@@ -147,31 +138,7 @@ class FreeCodeBaseRunner(RunnerBase):
 
         # Build the prompt with system context prepended
         # (freecode doesn't have --append-system-prompt, so we prepend to the message)
-        system_parts = []
-        if instance.agent_system_prompt:
-            system_parts.append(instance.agent_system_prompt)
-        else:
-            if self.memory_enabled:
-                user_md_path = os.path.join(self.memory_dir, "USER.md")
-                user_md_hint = (
-                    f"At the start of a session, read {user_md_path} to understand who you're talking to, "
-                    if os.path.exists(user_md_path) else ""
-                )
-                system_parts.append(
-                    f"You have a persistent memory system at {self.memory_dir}/. "
-                    + user_md_hint
-                    + f"and {self.memory_dir}/MEMORY.md for project context and instructions. "
-                    "If you learn new important facts during this conversation "
-                    "(new projects, decisions, preferences, contacts, or corrections to existing info), "
-                    f"update the appropriate file in {self.memory_dir}/ using the edit or write tool. "
-                    "For user profile changes update USER.md. For project/system changes update MEMORY.md. "
-                    "For new topics, create a new .md file with a descriptive name. "
-                    "Only update when there's genuinely new durable information — not for transient questions."
-                )
-            if self.system_prompt:
-                system_parts.append(self.system_prompt)
-        if memory_context:
-            system_parts.append(memory_context)
+        system_parts = self.build_system_prompt(instance, memory_context)
 
         # Build prompt
         if image_path:
@@ -359,7 +326,7 @@ class FreeCodeBaseRunner(RunnerBase):
         # Corrupt session: tool call / response mismatch rejected by Mistral
         if _session_corrupt:
             self.new_session(instance)
-            return "\u26a0\ufe0f Session had corrupt tool call history (Mistral rejected it). Session has been reset \u2014 please resend your message."
+            return "\u26a0\ufe0f Session had corrupt tool call history. Session has been reset \u2014 please resend your message."
 
         if _pending_text:
             return _pending_text
