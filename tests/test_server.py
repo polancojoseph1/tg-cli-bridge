@@ -20,6 +20,7 @@ os.environ.setdefault("ENV_FILE", "/dev/null")
 from fastapi.testclient import TestClient
 
 import server
+import health
 from server import app
 
 # Disable rate limiting during tests so multiple hits to /query don't trigger 429
@@ -27,6 +28,33 @@ server.app.dependency_overrides[server._limiter] = lambda: None
 server._limiter.enabled = False
 
 client = TestClient(app)
+
+
+# --- status endpoint test ---
+
+def test_status_endpoint():
+    # Ensure health is initialized properly so _start_time is set
+    health.init()
+
+    response = client.get("/status")
+
+    # Assert successful response
+    assert response.status_code == 200
+
+    data = response.json()
+
+    # Assert all keys expected from health.get_status() are present
+    assert "status" in data
+    assert "uptime_seconds" in data
+    assert "message_count" in data
+    assert "last_message_time" in data
+    assert "cli_runner" in data
+    assert "bot_name" in data
+    assert "cli_available" in data
+
+    # Assert some specific values where possible
+    assert data["status"] == "ok"
+    assert data["message_count"] >= 0
 
 
 # --- direct_query tests ---
@@ -134,7 +162,7 @@ def test_trigger_webhook_short_secret():
          patch("server.trigger_registry.get_trigger", return_value=mock_trigger):
         response = client.post("/triggers/webhook/test_trigger")
         assert response.status_code == 401
-        assert response.json() == {"ok": False, "error": "trigger secret too short — minimum 32 bytes required"}
+        assert response.json() == {"ok": False, "error": "trigger secret too short \u2014 minimum 32 bytes required"}
 
 
 def test_trigger_webhook_invalid_signature():
