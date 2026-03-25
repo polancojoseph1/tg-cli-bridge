@@ -121,18 +121,20 @@ class ClaudeRunner(RunnerBase):
         if system_parts:
             cmd += ["--append-system-prompt", "\n\n".join(system_parts)]
 
+        sanitized_message = message.replace("\x00", "")
+
         if image_path:
             paths = image_path if isinstance(image_path, list) else [image_path]
             if len(paths) == 1:
                 read_instructions = f"First, use the Read tool to view the image file at: {paths[0]}"
-                suffix = "Describe what you see in the image." if not message else f"Then respond to the user's request: {message}"
+                suffix = "Describe what you see in the image." if not sanitized_message else f"Then respond to the user's request: {sanitized_message}"
             else:
                 read_instructions = "First, use the Read tool to view each image file:\n" + "\n".join(f"- {p}" for p in paths)
-                suffix = "Describe what you see in each image." if not message else f"Then respond to the user's request: {message}"
+                suffix = "Describe what you see in each image." if not sanitized_message else f"Then respond to the user's request: {sanitized_message}"
             prompt = f"{read_instructions}\n\n{suffix}"
             cmd.append(prompt)
         else:
-            cmd.append(message.replace("\x00", ""))
+            cmd.append(sanitized_message)
 
         log_path = self.make_log_path(self.name, chat_id, instance.id)
         log_start_offset = os.path.getsize(log_path) if os.path.exists(log_path) else 0

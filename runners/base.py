@@ -155,7 +155,43 @@ class RunnerBase(ABC):
 
     def _clear_subprocess_info(self, instance: Any) -> None:
         """Clear subprocess tracking info from the instance."""
-        self._clear_subprocess_info(instance)
+        instance.subprocess_pid = 0
+        instance.subprocess_log_file = ""
+        instance.subprocess_start_time = ""
+
+    def build_env(self, base_env: dict, user_is_owner: bool) -> dict:
+        """Standardize environment variable construction for all runners.
+
+        Strips sensitive API keys for non-owner users.
+        """
+        env = base_env.copy()
+        if not user_is_owner:
+            # Sensitive keys that must NEVER be exposed to non-owners
+            for key in [
+                "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+                "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "MISTRAL_API_KEY",
+                "DEEPSEEK_API_KEY", "OLLAMA_API_KEY", "INTERNAL_API_KEY",
+                "TELEGRAM_BOT_TOKEN", "WHATSAPP_SECRET",
+            ]:
+                env.pop(key, None)
+        return env
+
+    def build_system_prompt(self, instance: Any, memory_context: str = "", extra_instructions: list[str] | None = None, memory_tool_names: str = "Read or Grep") -> list[str]:
+        """Standardize system prompt construction across all runners."""
+        parts = []
+        if self.system_prompt:
+            parts.append(self.system_prompt)
+        if extra_instructions:
+            parts.extend(extra_instructions)
+        if self.memory_enabled and memory_context:
+            parts.append(
+                f"Below is relevant context from your long-term memory. "
+                f"You should use this to answer the user's request accurately.\n\n"
+                f"--- MEMORY CONTEXT ---\n{memory_context}\n--- END MEMORY ---"
+            )
+            if memory_tool_names:
+                parts.append(f"When accessing files mentioned in memory, use {memory_tool_names} tools to verify current content.")
+        return parts
 
     async def stop_all(self, instances: list) -> int:
         """Stop processes for all given instances. Returns count stopped."""

@@ -12,7 +12,7 @@ import task_handler
 def test_ensure_file_creates_file(tmp_path, monkeypatch):
     """Test that _ensure_file creates the task file and its parent directories if they don't exist."""
     # Use tmp_path to mock the task file location
-    dummy_task_file = tmp_path / "Goals" / "TODOS.md"
+    dummy_task_file = tmp_path / "Goals" / "TASKS.md"
     monkeypatch.setattr(task_handler, "TASK_FILE", dummy_task_file)
 
     assert not dummy_task_file.exists()
@@ -25,7 +25,7 @@ def test_ensure_file_creates_file(tmp_path, monkeypatch):
 
 def test_ensure_file_does_not_overwrite(tmp_path, monkeypatch):
     """Test that _ensure_file does not overwrite an existing file."""
-    dummy_task_file = tmp_path / "Goals" / "TODOS.md"
+    dummy_task_file = tmp_path / "Goals" / "TASKS.md"
     dummy_task_file.parent.mkdir(parents=True, exist_ok=True)
     dummy_task_file.write_text("Existing content", encoding="utf-8")
 
@@ -39,7 +39,7 @@ def test_ensure_file_does_not_overwrite(tmp_path, monkeypatch):
 
 def test_add_task(tmp_path, monkeypatch):
     """Test that add_task functions correctly and ensures the file is created."""
-    dummy_task_file = tmp_path / "Goals" / "TODOS.md"
+    dummy_task_file = tmp_path / "Goals" / "TASKS.md"
     monkeypatch.setattr(task_handler, "TASK_FILE", dummy_task_file)
 
     result = task_handler.add_task("Test task")
@@ -50,7 +50,7 @@ def test_add_task(tmp_path, monkeypatch):
 
 def test_list_tasks(tmp_path, monkeypatch):
     """Test listing tasks."""
-    dummy_task_file = tmp_path / "Goals" / "TODOS.md"
+    dummy_task_file = tmp_path / "Goals" / "TASKS.md"
     monkeypatch.setattr(task_handler, "TASK_FILE", dummy_task_file)
 
     task_handler.add_task("Test task 1")
@@ -62,7 +62,7 @@ def test_list_tasks(tmp_path, monkeypatch):
 
 def test_done_task(tmp_path, monkeypatch):
     """Test completing a task."""
-    dummy_task_file = tmp_path / "Goals" / "TODOS.md"
+    dummy_task_file = tmp_path / "Goals" / "TASKS.md"
     monkeypatch.setattr(task_handler, "TASK_FILE", dummy_task_file)
 
     task_handler.add_task("Test task 1")
