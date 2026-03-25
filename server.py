@@ -148,12 +148,38 @@ _MG_WAIT  = 0.8              # seconds to collect album frames
 _DEBOUNCE = 0.4              # seconds to group text+photo sent in quick succession
 
 
-def _flush_mg(mg_id: str) -> None:
+
+
+async def _route_and_enqueue(merged: QueuedMessage, routing_text: str) -> None:
+    """Helper: route a merged message to the best instance and enqueue it."""
+    try:
+        target_instance = await _resolve_target_instance_async(routing_text or "photo", merged.user_id)
+        merged.instance_id = target_instance.id
+        await _enqueue_message(merged)
+    except Exception as e:
+        logger.error("Failed to route/enqueue merged message: %s", e)
+        await send_message(merged.chat_id, f"Error routing your message: {e}")
+
+
+async def _flush_mg_async(mg_id: str) -> None:
     """Merge all buffered album photos and enqueue as one message."""
     items = _mg_buffer.pop(mg_id, [])
     _mg_timers.pop(mg_id, None)
     if not items:
         return
+    try:
+        await _flush_mg_inner(items)
+    except Exception as e:
+        logger.exception("Error flushing media group")
+        # Try to notify the user of the primary chat
+        if items:
+            try:
+                await send_message(items[0].chat_id, f"Error processing media group: {e}")
+            except Exception:
+                pass
+
+
+async def _flush_mg_inner(items: list[QueuedMessage]) -> None:
     primary = items[0]
     extra = [i.file_id for i in items[1:] if i.file_id]
     caption = next((i.text for i in items if i.text), "")
@@ -163,24 +189,35 @@ def _flush_mg(mg_id: str) -> None:
         text=caption,
         file_id=primary.file_id,
         extra_file_ids=extra,
-        instance_id=primary.instance_id,
+        instance_id=0,  # routed in _route_and_enqueue
         user_id=primary.user_id,
     )
-    asyncio.create_task(_enqueue_message(merged))
+    # Media groups: if there's no caption, the router just sees "photo"
+    await _route_and_enqueue(merged, caption or "photo")
 
 
-def _flush_chat(chat_id: int) -> None:
-    """Merge debounced items for a chat into one combined message."""
+async def _flush_chat_async(chat_id: int) -> None:
+    """Merge debounced items for a chat and route to the correct instance."""
     items = _chat_debounce.pop(chat_id, [])
     _chat_timers.pop(chat_id, None)
     if not items:
         return
-    if len(items) == 1:
-        asyncio.create_task(_enqueue_message(items[0]))
-        return
+    try:
+        await _flush_chat_inner(items)
+    except Exception as e:
+        logger.exception("Error flushing chat")
+        try:
+            await send_message(chat_id, f"Error processing message: {e}")
+        except Exception:
+            pass
+
+
+async def _flush_chat_inner(items: list[QueuedMessage]) -> None:
     photos = [i for i in items if i.msg_type == MessageType.PHOTO]
     texts  = [i.text for i in items if i.text]
     combined_text = "\n".join(texts)
+    user_id = items[0].user_id
+
     if photos:
         primary = photos[0]
         extra = [i.file_id for i in photos[1:] if i.file_id]
@@ -190,8 +227,8 @@ def _flush_chat(chat_id: int) -> None:
             text=combined_text,
             file_id=primary.file_id,
             extra_file_ids=extra,
-            instance_id=primary.instance_id,
-            user_id=primary.user_id,
+            instance_id=0,  # routed in _route_and_enqueue
+            user_id=user_id,
         )
     else:
         first = items[0]
@@ -200,10 +237,20 @@ def _flush_chat(chat_id: int) -> None:
             msg_type=MessageType.TEXT,
             text=combined_text,
             voice_reply=first.voice_reply,
-            instance_id=first.instance_id,
-            user_id=first.user_id,
+            instance_id=0,  # routed in _route_and_enqueue
+            user_id=user_id,
         )
-    asyncio.create_task(_enqueue_message(merged))
+    await _route_and_enqueue(merged, combined_text)
+
+
+def _flush_chat(chat_id: int) -> None:
+    """Synchronous wrapper to flush chat debounce timer."""
+    asyncio.create_task(_flush_chat_async(chat_id))
+
+
+def _flush_mg(mg_id: str) -> None:
+    """Synchronous wrapper to flush media-group timer."""
+    asyncio.create_task(_flush_mg_async(mg_id))
 
 
 def _buffer_for_mg(item: QueuedMessage, mg_id: str) -> None:
@@ -1066,13 +1113,12 @@ async def process_update(body: dict) -> None:
         media_group_id = message.get("media_group_id")
         health.record_message()
 
-        target_instance = _resolve_target_instance(caption or "photo", user_id)
         item = QueuedMessage(
             chat_id=chat_id,
             msg_type=MessageType.PHOTO,
             text=caption,
             file_id=file_id,
-            instance_id=target_instance.id,
+            instance_id=0,  # routed later in _flush_chat
             user_id=user_id,
         )
         if media_group_id:
@@ -1179,23 +1225,15 @@ async def process_update(body: dict) -> None:
     # Regular text message -- route to instance and process
     health.record_message()
 
-    async def _route_and_buffer():
-        try:
-            target_instance = await _resolve_target_instance_async(text, user_id)
-            item = QueuedMessage(
-                chat_id=chat_id,
-                msg_type=MessageType.TEXT,
-                text=text,
-                voice_reply=_voice_reply_mode,
-                instance_id=target_instance.id,
-                user_id=user_id,
-            )
-            _buffer_for_chat(item)
-        except Exception as e:
-            logger.error("Failed to route/buffer message: %s", e)
-            await send_message(chat_id, f"Error queuing message: {e}")
-
-    asyncio.create_task(_route_and_buffer())
+    item = QueuedMessage(
+        chat_id=chat_id,
+        msg_type=MessageType.TEXT,
+        text=text,
+        voice_reply=_voice_reply_mode,
+        instance_id=0,  # routed later in _flush_chat
+        user_id=user_id,
+    )
+    _buffer_for_chat(item)
 
 
 async def _run_polling() -> None:
