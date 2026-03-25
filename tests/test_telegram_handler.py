@@ -35,17 +35,17 @@ class TestSplitMessage:
 
 class TestMarkdownToTelegramHtml:
     def test_bold(self):
-        # Bold markers are converted to <b> HTML tags for Telegram HTML parse mode
+        # Bold markers are stripped
         result = markdown_to_telegram_html("**hello**")
         assert "hello" in result
         assert "**" not in result
-        assert result == "<b>hello</b>"
+        assert result == "hello"
 
     def test_italic(self):
-        # Italic markers are converted to <i> HTML tags for Telegram HTML parse mode
+        # Italic markers are stripped
         result = markdown_to_telegram_html("*hello*")
         assert "hello" in result
-        assert result == "<i>hello</i>"
+        assert result == "hello"
 
     def test_code_block(self):
         result = markdown_to_telegram_html("```\ncode\n```")

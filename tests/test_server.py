@@ -108,6 +108,24 @@ def test_direct_query_invalid_auth():
     assert response.status_code == 401
     assert response.json() == {"ok": False, "error": "Unauthorized"}
 
+def test_get_prompts_invalid_auth():
+    server.INTERNAL_API_KEY = "test-key"
+    response = client.get(
+        "/prompts",
+        headers={"X-API-Key": "wrong-key"}
+    )
+    assert response.status_code == 401
+    assert response.json() == {"error": "Unauthorized"}
+
+def test_get_prompts_success():
+    server.INTERNAL_API_KEY = "test-key"
+    server.PROMPTS = {"test": "test prompt"}
+    response = client.get(
+        "/prompts",
+        headers={"X-API-Key": "test-key"}
+    )
+    assert response.status_code == 200
+
 def test_direct_query_success():
     server.INTERNAL_API_KEY = "test-key"
     server.runner.run_query = AsyncMock(return_value="mocked response")
