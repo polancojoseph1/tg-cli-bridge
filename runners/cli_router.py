@@ -306,11 +306,9 @@ class CLIRouterRunner(RunnerBase):
         return total
 
     async def stop_all(self, instances: list) -> int:
-        count = 0
-        for inst in instances:
-            if await self.stop(inst):
-                count += 1
-        return count
+        import asyncio
+        results = await asyncio.gather(*(self.stop(inst) for inst in instances))
+        return sum(1 for r in results if r)
 
     async def run_query(self, prompt: str, timeout: int = 120) -> str:
         """One-shot stateless query with rotation."""

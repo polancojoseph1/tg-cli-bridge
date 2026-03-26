@@ -2136,8 +2136,9 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         # Always keep at least one instance (the active one or first busy)
         keep = instances.get_active_for(owner_id)
         to_remove = [i for i in idle if i.id != keep.id]
+
+        await runner.stop_all(to_remove)
         for inst in to_remove:
-            await runner.stop(inst)
             inst.clear_queue()
             if inst.current_task and not inst.current_task.done():
                 inst.current_task.cancel()
@@ -2164,8 +2165,9 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         # Kill all processes, remove all instances, reset to one Default
         all_insts = instances.list_all(for_owner_id=owner_id)
         count = len(all_insts)
+
+        await runner.stop_all(all_insts)
         for inst in all_insts:
-            await runner.stop(inst)
             inst.clear_queue()
             if inst.current_task and not inst.current_task.done():
                 inst.current_task.cancel()

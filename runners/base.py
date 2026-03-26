@@ -195,11 +195,9 @@ class RunnerBase(ABC):
 
     async def stop_all(self, instances: list) -> int:
         """Stop processes for all given instances. Returns count stopped."""
-        count = 0
-        for inst in instances:
-            if await self.stop(inst):
-                count += 1
-        return count
+        import asyncio
+        results = await asyncio.gather(*(self.stop(inst) for inst in instances))
+        return sum(1 for r in results if r)
 
     async def kill_all(self) -> int:
         """Kill ALL processes of this CLI type on the system.
