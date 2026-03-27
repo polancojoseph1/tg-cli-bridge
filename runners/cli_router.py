@@ -261,12 +261,12 @@ class CLIRouterRunner(RunnerBase):
         last_used = self._instance_active.get(instance_id)
 
         result = []
-        # 1. Instance-level pin (set by agent spawn or user — always wins)
-        if last_used and last_used in available:
-            result.append(last_used)
-        # 2. Global preference (only applies when no instance pin exists)
-        if preferred and preferred in available and preferred not in result:
+        # 1. Global preference wins when explicitly set via /cli
+        if preferred and preferred in available:
             result.append(preferred)
+        # 2. Instance-level last used (fallback for auto mode)
+        if last_used and last_used in available and last_used not in result:
+            result.append(last_used)
         # 3. Remaining in configured order
         for name in available:
             if name not in result:
