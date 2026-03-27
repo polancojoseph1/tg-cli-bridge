@@ -77,6 +77,18 @@ def _convert_markdown_tables(text: str) -> str:
     return "\n".join(result)
 
 
+_RE_CODE_BLOCK = re.compile(r"```\w*\n(.*?)```", flags=re.DOTALL)
+_RE_INLINE_CODE = re.compile(r"`([^`]+)`")
+_RE_URL = re.compile(r"https?://")
+_RE_BARE_URL = re.compile(r'(?<!href=")(https?://[^\s<>"]+)')
+_RE_HEADERS = re.compile(r"^#{1,6}\s+(.+)$", flags=re.MULTILINE)
+_RE_BOLD = re.compile(r"\*\*(.+?)\*\*", flags=re.DOTALL)
+_RE_ITALIC = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
+_RE_HRULE = re.compile(r"^---+$", flags=re.MULTILINE)
+_RE_BLANK_LINES = re.compile(r"\n{3,}")
+_RE_STRIP_HTML = re.compile(r"<[^>]+>")
+
+
 def markdown_to_telegram_html(text: str) -> str:
     """Convert GitHub-flavored markdown to Telegram-compatible HTML.
 
@@ -89,40 +101,40 @@ def markdown_to_telegram_html(text: str) -> str:
     text = _convert_markdown_tables(text)
 
     # Code blocks (```lang\n...\n```) → <pre>...</pre>
-    text = re.sub(r"```\w*\n(.*?)```", r"<pre>\1</pre>", text, flags=re.DOTALL)
+    text = _RE_CODE_BLOCK.sub(r"<pre>\1</pre>", text)
 
     # Inline code (`...`) → <code>...</code>, but URLs → <a href>
     def _inline_code(m: re.Match) -> str:
         inner = m.group(1).strip()
-        if re.match(r"https?://", inner):
+        if _RE_URL.match(inner):
             return f'<a href="{inner}">{inner}</a>'
         return f"<code>{inner}</code>"
-    text = re.sub(r"`([^`]+)`", _inline_code, text)
+    text = _RE_INLINE_CODE.sub(_inline_code, text)
 
     # Bare URLs (not already inside an href) → <a href>
-    text = re.sub(r'(?<!href=")(https?://[^\s<>"]+)', r'<a href="\1">\1</a>', text)
+    text = _RE_BARE_URL.sub(r'<a href="\1">\1</a>', text)
 
     # Headers (## ...) → plain text, strip the # prefix
-    text = re.sub(r"^#{1,6}\s+(.+)$", r"\1", text, flags=re.MULTILINE)
+    text = _RE_HEADERS.sub(r"\1", text)
 
     # Bold (**...**) → <b>...</b>
-    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text, flags=re.DOTALL)
+    text = _RE_BOLD.sub(r"<b>\1</b>", text)
 
     # Italic (*...*) → <i>...</i>
-    text = re.sub(r"(?<!\w)\*([^*]+?)\*(?!\w)", r"<i>\1</i>", text)
+    text = _RE_ITALIC.sub(r"<i>\1</i>", text)
 
     # Horizontal rules → remove
-    text = re.sub(r"^---+$", "", text, flags=re.MULTILINE)
+    text = _RE_HRULE.sub("", text)
 
     # Collapse 3+ blank lines to 2
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _RE_BLANK_LINES.sub("\n\n", text)
 
     return text.strip()
 
 
 def strip_html_tags(text: str) -> str:
     """Remove HTML tags for plain-text fallback."""
-    return re.sub(r"<[^>]+>", "", text)
+    return _RE_STRIP_HTML.sub("", text)
 
 
 def split_message(text: str, limit: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> list[str]:

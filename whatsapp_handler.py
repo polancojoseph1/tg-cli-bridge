@@ -11,9 +11,11 @@ The Baileys Node.js bridge (whatsapp-bridge/) runs on WA_BRIDGE_URL:
 """
 
 import asyncio
+import functools
 import hashlib
 import logging
 import os
+import re
 import httpx
 
 logger = logging.getLogger("bridge.whatsapp")
@@ -25,7 +27,10 @@ _client: httpx.AsyncClient | None = None
 # Stable int → WA JID mapping so all of server.py can use int chat_ids
 _jid_map: dict[int, str] = {}
 
+_RE_STRIP_HTML = re.compile(r"<[^>]+>")
 
+
+@functools.lru_cache(maxsize=1024)
 def jid_to_int(jid: str) -> int:
     """Stable mapping from WhatsApp JID to a positive int (used as chat_id / user_id)."""
     return int(hashlib.md5(jid.encode()).hexdigest(), 16) % (2 ** 31 - 1)
@@ -69,8 +74,7 @@ async def send_message(
 
     if format_markdown or parse_mode == "HTML":
         # Strip HTML tags for WhatsApp — WA uses *bold*, _italic_ but we just send plain text
-        import re
-        text = re.sub(r"<[^>]+>", "", text)
+        text = _RE_STRIP_HTML.sub("", text)
 
     if not text.strip():
         return None
