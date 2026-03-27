@@ -631,6 +631,18 @@ async def api_chat_proxy(request: Request):
 
     agent_id = body.get("agent_id", "claude")
     target_url = _API_AGENT_URLS.get(agent_id, _API_AGENT_URLS["claude"])
+
+    # Validate URL to prevent SSRF
+    try:
+        from urllib.parse import urlparse as _urlparse
+        _p = _urlparse(target_url)
+        if _p.scheme not in ("http", "https"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"type": "error", "message": "Invalid URL protocol"}, status_code=400)
+    except Exception:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"type": "error", "message": "Invalid server URL"}, status_code=400)
+
     # Read key at request time so env changes take effect without restart.
     # Falls back to BRIDGE_CLOUD_API_KEY (set in .env.claude) for self-hosted bots.
     api_key = (
@@ -763,6 +775,15 @@ async def api_proxy_verify(request: Request):
 
     if not url:
         return _JSONResponse({"status": "offline", "error": "No URL provided"})
+
+    # Validate URL to prevent SSRF
+    try:
+        from urllib.parse import urlparse as _urlparse
+        _p = _urlparse(url)
+        if _p.scheme not in ("http", "https"):
+            return _JSONResponse({"status": "offline", "error": "Invalid URL protocol"})
+    except Exception:
+        return _JSONResponse({"status": "offline", "error": "Invalid server URL"})
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
