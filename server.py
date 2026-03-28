@@ -2279,7 +2279,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             new_model = None
             # Antigravity runner: Antigravity-specific model shortcuts
             if CLI_RUNNER == "antigravity":
-                from runners.antigravity import AntigravityRunner, _AG_MODELS
+                from runners.antigravity import _AG_MODELS
                 m_lower = m.lower().strip()
                 new_model = _AG_MODELS.get(m_lower)
                 if not new_model and "/" in m:

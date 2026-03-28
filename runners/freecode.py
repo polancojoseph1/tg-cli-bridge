@@ -184,7 +184,7 @@ class FreeCodeBaseRunner(RunnerBase):
 
         # Build the prompt with system context
         system_parts = self.build_system_prompt(instance, memory_context)
-        
+
         # Inject system prompt via FREECODE_CONFIG_DIR/AGENTS.md to survive compaction
         self._configure_system_instructions(instance, env, system_parts)
 
