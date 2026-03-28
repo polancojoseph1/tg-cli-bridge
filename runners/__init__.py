@@ -37,5 +37,8 @@ def create_runner() -> RunnerBase:
     elif CLI_RUNNER == "openrouter":
         from runners.openrouter import OpenRouterRunner
         return OpenRouterRunner()
+    elif CLI_RUNNER == "antigravity":
+        from runners.antigravity import AntigravityRunner
+        return AntigravityRunner()
     else:
-        raise ValueError(f"Unknown CLI_RUNNER: '{CLI_RUNNER}'. Use: claude, gemini, codex, qwen, freecode, generic, free, router, or openrouter")
+        raise ValueError(f"Unknown CLI_RUNNER: '{CLI_RUNNER}'. Use: claude, gemini, codex, qwen, freecode, generic, free, router, openrouter, or antigravity")

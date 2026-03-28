@@ -158,8 +158,13 @@ class CodexRunner(RunnerBase):
                     + "\n\n".join(injected)
                 )
 
-        if self.system_prompt and is_initial:
-            parts.append(f"[SYSTEM]\n{self.system_prompt}")
+        if is_initial:
+            system_parts = []
+            if self.system_prompt:
+                system_parts.append(self.system_prompt)
+            system_parts.extend(self.EXECUTION_GUARDRAILS)
+            if system_parts:
+                parts.append("[SYSTEM]\n" + "\n\n".join(system_parts))
 
         if memory_context:
             parts.append(memory_context)

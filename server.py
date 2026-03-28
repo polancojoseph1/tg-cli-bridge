@@ -2226,7 +2226,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
             "/clear \u2014 Kill all instances, reset to one Default\n"
             "/new \u2014 Reset conversation for the active instance\n"
             "/server \u2014 Restart bridge server\n"
-            f"/model {'<name>' if CLI_RUNNER in ('opencode', 'freecode') else 'sonnet|opus'} \u2014 Switch model [{(active.model.split('/')[-1] if '/' in active.model else (active.model.split('-')[1] if '-' in active.model else active.model) if active.model else 'default').capitalize()}]\n"
+            f"/model {'<name>' if CLI_RUNNER in ('opencode', 'freecode', 'antigravity') else 'sonnet|opus'} \u2014 Switch model [{(active.model.split('/')[-1] if '/' in active.model else (active.model.split('-')[1] if '-' in active.model else active.model) if active.model else 'default').capitalize()}]\n"
             + ("/cli [name|auto] \u2014 Switch CLI backend or show status\n" if CLI_RUNNER == "router" else "") +
             "\n"
             "**Display**\n"
@@ -2266,8 +2266,10 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         parts = text.split()
         if len(parts) < 2:
             inst = instances.get_active_for(owner_id)
-            current = inst.model or os.environ.get("FREECODE_MODEL", os.environ.get("OPENCODE_MODEL", "")) or "(default)"
-            if CLI_RUNNER in ("opencode", "freecode"):
+            current = inst.model or os.environ.get("FREECODE_MODEL", os.environ.get("OPENCODE_MODEL", os.environ.get("AG_MODEL", ""))) or "(default)"
+            if CLI_RUNNER == "antigravity":
+                usage_hint = "Usage: /model <name>\nShortcuts: pro, flash, sonnet, opus, gpt-oss\nOr full: openrouter/anthropic/claude-sonnet-4.6"
+            elif CLI_RUNNER in ("opencode", "freecode"):
                 usage_hint = "Usage: /model <name>\nShortcuts: free, litellm, mimo, deepseek, sonnet, opus\nOr full name: openrouter/anthropic/claude-sonnet-4"
             else:
                 usage_hint = "Usage: /model [sonnet|opus]"
@@ -2275,8 +2277,15 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
         else:
             m = " ".join(parts[1:]).strip()
             new_model = None
+            # Antigravity runner: Antigravity-specific model shortcuts
+            if CLI_RUNNER == "antigravity":
+                from runners.antigravity import AntigravityRunner, _AG_MODELS
+                m_lower = m.lower().strip()
+                new_model = _AG_MODELS.get(m_lower)
+                if not new_model and "/" in m:
+                    new_model = m  # accept full provider/model
             # FreeCode runner: support shortcuts + full model names
-            if CLI_RUNNER in ("opencode", "freecode"):
+            elif CLI_RUNNER in ("opencode", "freecode"):
                 m_lower = m.lower()
                 _freecode_shortcuts = {
                     "free": "litellm/free-agent",
@@ -2309,7 +2318,10 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 inst.model = new_model
                 await send_message(chat_id, f"\u2705 Model for <b>#{instances.display_num(inst.id, owner_id)}</b> set to <code>{new_model}</code>", parse_mode="HTML")
             else:
-                if CLI_RUNNER in ("opencode", "freecode"):
+                if CLI_RUNNER == "antigravity":
+                    shortcuts = "pro, flash, sonnet, opus, gpt-oss"
+                    await send_message(chat_id, f"\u274c Unknown model.\nAvailable shortcuts: {shortcuts}\nOr full: openrouter/anthropic/claude-sonnet-4.6")
+                elif CLI_RUNNER in ("opencode", "freecode"):
                     shortcuts = "free, litellm, mimo, pickle, nano, deepseek, sonnet, opus, haiku, gemini, gpt4o, llama, qwen"
                     await send_message(chat_id, f"\u274c Unknown model shortcut.\nAvailable: {shortcuts}\nOr pass a full model name like: openrouter/provider/model")
                 else:
@@ -2327,7 +2339,7 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 status = runner.get_status()
                 pref = runner.preference
                 active_inst = instances.get_active_for(owner_id)
-                active_cli = runner.get_active_for(active_inst.id)
+                active_cli = runner.get_active_for(active_inst)
                 lines = [f"<b>\U0001f504 CLI Router</b> \u2014 {'auto' if pref == 'auto' else f'pinned to {pref}'}"]
                 for name in runner.runner_names:
                     info = status[name]
@@ -2346,20 +2358,31 @@ async def _handle_command(chat_id: int, text: str, user_id: int = 0) -> None:
                 await send_message(chat_id, "\n".join(lines), parse_mode="HTML")
             elif sub == "auto":
                 runner.set_preference("auto")
+                active_inst = instances.get_active_for(owner_id)
+                if active_inst:
+                    runner._instance_active.pop(active_inst.id, None)
+                    active_inst.adapter_data.get("cli_router", {}).pop("active_runner", None)
                 await send_message(chat_id, "\U0001f504 Auto-rotation enabled. Router will pick the best available CLI.")
             elif sub == "next":
                 active_inst = instances.get_active_for(owner_id)
-                current = runner.get_active_for(active_inst.id)
-                next_cli = runner.skip_to_next(active_inst.id)
+                current = runner.get_active_for(active_inst)
+                next_cli = runner.skip_to_next(active_inst)
                 if next_cli:
                     await send_message(chat_id, f"\u23e9 Skipped {current or 'none'} \u2192 <b>{next_cli}</b> (next message will use it)", parse_mode="HTML")
                 else:
                     await send_message(chat_id, "\u274c No other CLIs available right now.")
-            elif runner.set_preference(sub):
-                await send_message(chat_id, f"\U0001f4cc Pinned to <b>{sub}</b>. Use <code>/cli auto</code> to re-enable rotation.", parse_mode="HTML")
             else:
-                available = ", ".join(runner.runner_names)
-                await send_message(chat_id, f"\u274c Unknown CLI: {sub}\nAvailable: {available}, auto")
+                if sub == "anti":
+                    sub = "antigravity"
+                if runner.set_preference(sub):
+                    active_inst = instances.get_active_for(owner_id)
+                    if active_inst:
+                        runner._instance_active[active_inst.id] = sub
+                        active_inst.adapter_data.setdefault("cli_router", {})["active_runner"] = sub
+                    await send_message(chat_id, f"\U0001f4cc Pinned to <b>{sub}</b>. Use <code>/cli auto</code> to re-enable rotation.", parse_mode="HTML")
+                else:
+                    available = ", ".join(runner.runner_names)
+                    await send_message(chat_id, f"\u274c Unknown CLI: {sub}\nAvailable: {available}, auto")
 
     elif cmd == "/list":
         await send_message(chat_id, instances.format_list(for_owner_id=owner_id), parse_mode="HTML")

@@ -172,6 +172,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
 
         # Build system prompt
         system_parts = self.build_system_prompt(instance, memory_context)
+        self._configure_system_instructions(instance, env, system_parts)
 
         if image_path:
             prompt = (
@@ -181,9 +182,6 @@ class FreeCodeRunner(FreeCodeBaseRunner):
             )
         else:
             prompt = message
-
-        if system_parts and not session_started:
-            prompt = "[System Instructions]\n" + "\n\n".join(system_parts) + "\n\n[User Message]\n" + prompt
 
         cmd.append(prompt)
 
@@ -234,7 +232,12 @@ class FreeCodeRunner(FreeCodeBaseRunner):
             nonlocal _captured_session_id, _pending_text, _session_corrupt
             _any_progress_sent = False
 
-            async for line, _offset in self.tail_log_file(log_path, start_offset=log_start_offset, proc=proc):
+            async for line, _offset in self.tail_log_file(
+                log_path,
+                start_offset=log_start_offset,
+                proc=proc,
+                stall_timeout=self.stall_timeout,
+            ):
                 if not line:
                     continue
                 try:
@@ -287,12 +290,14 @@ class FreeCodeRunner(FreeCodeBaseRunner):
                     _corrupt_keywords = ("invalid_request_message_order", "not the same number of function calls")
                     if any(k in err_msg.lower() for k in _corrupt_keywords):
                         _session_corrupt = True
-                    elif on_progress:
-                        await on_progress(f"\u274c {err_name}: {err_msg[:200]}")
                     else:
-                        # No progress callback (Bridge Cloud path) — surface error as response
+                        # Always surface error as final response so it isn't swallowed
                         _pending_text = f"\u274c {err_name}: {err_msg[:200]}"
+                        if on_progress:
+                            await on_progress(_pending_text)
 
+            if proc.returncode is None:
+                return
             await proc.wait()
 
         _keepalive_task = self.start_keepalive_task(on_progress, _last_progress_time)
@@ -300,11 +305,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
             await asyncio.wait_for(process_stream(), timeout=self.timeout)
         except asyncio.TimeoutError:
             _keepalive_task.cancel()
-            try:
-                proc.kill()
-                await proc.wait()
-            except ProcessLookupError:
-                pass
+            await self._terminate_process_group(proc)
             instance.process = None
             self._clear_subprocess_info(instance)
             return "\u23f0 FreeCode took too long to respond (timed out)."
@@ -315,8 +316,18 @@ class FreeCodeRunner(FreeCodeBaseRunner):
 
         if instance.was_stopped:
             instance.was_stopped = False
+            await self._terminate_process_group(proc)
             self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
+
+        if proc.returncode is None:
+            self.new_session(instance)
+            await self._terminate_process_group(proc)
+            self._clear_subprocess_info(instance)
+            return (
+                f"\u274c FreeCode stalled with no new output for {int(self.stall_timeout)}s. "
+                "Session reset. Please resend your message."
+            )
 
         if proc.returncode == 0:
             instance.session_started = True
@@ -349,4 +360,7 @@ class FreeCodeRunner(FreeCodeBaseRunner):
 
         if _pending_text:
             return _pending_text
+        # Model completed via tool calls with no final text summary — that's fine
+        if _usage.get("output_tokens", 0) > 0 or _usage.get("cost", 0.0) > 0:
+            return "\u2705 Done."
         return "(empty response from FreeCode)"

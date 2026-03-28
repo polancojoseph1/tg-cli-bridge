@@ -87,6 +87,10 @@ def _create_runner_by_name(name: str) -> "RunnerBase | None":
             from runners.free import FreeCodeRunner
             r = FreeCodeRunner()
             return r if r.is_available() else None
+        elif name == "antigravity":
+            from runners.antigravity import AntigravityRunner
+            r = AntigravityRunner()
+            return r if r.is_available() else None
     except Exception as e:
         logger.warning("[cli-router] Failed to create %s runner: %s", name, e)
     return None
@@ -165,19 +169,28 @@ class CLIRouterRunner(RunnerBase):
     def runner_names(self) -> list[str]:
         return list(self._order)
 
-    def get_active_for(self, instance_id: int) -> str | None:
-        return self._instance_active.get(instance_id)
+    def get_active_for(self, instance: Any) -> str | None:
+        inst_id = getattr(instance, "id", instance)
+        active = self._instance_active.get(inst_id)
+        if not active and hasattr(instance, "adapter_data"):
+            active = instance.adapter_data.get("cli_router", {}).get("active_runner")
+            if active:
+                self._instance_active[inst_id] = active
+        return active
 
-    def skip_to_next(self, instance_id: int) -> str | None:
+    def skip_to_next(self, instance: Any) -> str | None:
         """Put the current CLI on cooldown and return the next available one, or None."""
-        current = self._instance_active.get(instance_id)
+        inst_id = getattr(instance, "id", instance)
+        current = self.get_active_for(instance)
         if current:
             self._cooldowns[current] = time.time() + RATE_LIMIT_COOLDOWN
             logger.info("[cli-router] Manual skip: %s → cooldown", current)
         now = time.time()
         for name in self._order:
             if name != current and now >= self._cooldowns.get(name, 0):
-                self._instance_active[instance_id] = name
+                self._instance_active[inst_id] = name
+                if hasattr(instance, "adapter_data"):
+                    instance.adapter_data.setdefault("cli_router", {})["active_runner"] = name
                 return name
         return None
 
@@ -254,7 +267,7 @@ class CLIRouterRunner(RunnerBase):
 
     # ── Try order ───────────────────────────────────────────────────────
 
-    def _build_try_order(self, instance_id: int) -> list[str]:
+    def _build_try_order(self, instance: Any) -> list[str]:
         now = time.time()
         available = [n for n in self._order if now >= self._cooldowns.get(n, 0)]
         if not available:
@@ -262,7 +275,7 @@ class CLIRouterRunner(RunnerBase):
             return sorted(self._order, key=lambda n: self._cooldowns.get(n, 0))
 
         preferred = self._preference if self._preference != "auto" else None
-        last_used = self._instance_active.get(instance_id)
+        last_used = self.get_active_for(instance)
 
         result = []
         # 1. Instance-level pin (set by agent spawn or user — always wins)
@@ -283,16 +296,14 @@ class CLIRouterRunner(RunnerBase):
         return bool(self._runners)
 
     def new_session(self, instance) -> None:
-        active = self._instance_active.get(instance.id)
+        active = self.get_active_for(instance)
         if active and active in self._runners:
             self._runners[active].new_session(instance)
         elif self._order:
             self._runners[self._order[0]].new_session(instance)
-        # Clear all router state for this instance
+        # Clear sessions stats but retain active_runner pin
         rd = instance.adapter_data.get("cli_router", {})
-        rd.pop("active_runner", None)
         rd.pop("sessions", None)
-        self._instance_active.pop(instance.id, None)
 
     async def stop(self, instance) -> bool:
         active = self._instance_active.get(instance.id)
@@ -344,7 +355,7 @@ class CLIRouterRunner(RunnerBase):
         chat_id: int = 0,
         user_is_owner: bool = True,
     ) -> str:
-        try_order = self._build_try_order(instance.id)
+        try_order = self._build_try_order(instance)
         if not try_order:
             return "\u274c No CLI runners available. Install claude, gemini, codex, or qwen."
 

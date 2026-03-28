@@ -34,6 +34,11 @@ class RunnerBase(ABC):
     # Subclasses set these
     name: str = ""              # e.g. "claude", "gemini", "codex"
     cli_command: str = ""       # binary name to find in PATH (e.g. "claude")
+    EXECUTION_GUARDRAILS = (
+        "Do not use EnterPlanMode or ExitPlanMode. Those require interactive approval and do not work in this headless bridge context. "
+        "Write your plan in normal text if needed, then execute directly.",
+        "When the user asks you to fix, change, or do something, take action immediately. Do not ask for confirmation before acting unless the task is destructive or blocked.",
+    )
 
     def __init__(self):
         from config import CLI_TIMEOUT, CLI_SYSTEM_PROMPT, MEMORY_DIR, MEMORY_ENABLED, USER_NAME
@@ -181,6 +186,7 @@ class RunnerBase(ABC):
         parts = []
         if self.system_prompt:
             parts.append(self.system_prompt)
+        parts.extend(self.EXECUTION_GUARDRAILS)
         if extra_instructions:
             parts.extend(extra_instructions)
         if self.memory_enabled and memory_context:
@@ -276,6 +282,32 @@ class RunnerBase(ABC):
             except ProcessLookupError:
                 pass
             raise
+
+    @staticmethod
+    async def _run_cmd_with_timeout(
+        cmd: list[str],
+        timeout: float,
+        env: dict[str, str],
+        name: str,
+        cwd: str | None = None,
+    ) -> tuple[bytes, bytes, str | None]:
+        """Run a subprocess command and return stdout/stderr or a formatted error."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=cwd,
+            )
+        except OSError as exc:
+            return b"", b"", f"❌ Error starting {name}: {exc}"
+
+        try:
+            stdout_data, stderr_data = await RunnerBase.read_with_timeout(proc, timeout)
+        except asyncio.TimeoutError:
+            return b"", b"", f"⏰ {name} took too long to respond (timed out)."
+        return stdout_data, stderr_data, None
 
     @staticmethod
     def get_pid_start_time(pid: int) -> str:

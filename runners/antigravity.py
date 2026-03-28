@@ -1,114 +1,119 @@
-"""FreeCode CLI runner adapter.
+"""Antigravity runner — wraps opencode with Antigravity-flavored defaults.
 
-Subprocess: freecode run --format json --session <id> "prompt"
-Session: freecode-assigned session IDs (ses_...), --continue for subsequent calls
-System prompt: injected through FREECODE_CONFIG_DIR/AGENTS.md so it survives compaction
-Output format: NDJSON events — step_start, text, tool_use, step_finish, error
+Subprocess: opencode run --format json -m <model> "prompt"
+Session: opencode ses_... IDs, --session for continuation
+System prompt: prepended to first user message
+Output format: NDJSON events — same as freecode/opencode
+
+Models (set via /model command):
+  pro / high / g3p     → google/gemini-3-pro-preview
+  flash / low / g3f    → google/gemini-3-flash-preview
+  sonnet               → openrouter/anthropic/claude-sonnet-4.6
+  opus                 → openrouter/anthropic/claude-opus-4.6
+  gpt / gpt-oss        → groq/openai/gpt-oss-120b
+
+Auth: one-time setup required — run in terminal:
+  OPENCODE_CONFIG_DIR=~/.jefe/antigravity-opencode opencode auth login
 """
 
 import asyncio
 import json
 import logging
 import os
-import signal
 import sys
 import time
 from typing import Callable, Awaitable
 
 from runners.base import RunnerBase, _SUBPROCESS_LOGGER
 
-logger = logging.getLogger("bridge.freecode")
+logger = logging.getLogger("bridge.antigravity")
+
+# Map /model shortcut → full model ID
+_AG_MODELS: dict[str, str] = {
+    "pro":    "google/gemini-3-pro-preview",
+    "high":   "google/gemini-3-pro-preview",
+    "g3p":    "google/gemini-3-pro-preview",
+    "gemini": "google/gemini-3-pro-preview",
+    "flash":  "google/gemini-3-flash-preview",
+    "low":    "google/gemini-3-flash-preview",
+    "g3f":    "google/gemini-3-flash-preview",
+    "sonnet": "openrouter/anthropic/claude-sonnet-4.6",
+    "claude": "openrouter/anthropic/claude-sonnet-4.6",
+    "opus":   "openrouter/anthropic/claude-opus-4.6",
+    "gpt":    "groq/openai/gpt-oss-120b",
+    "gpt-oss":"groq/openai/gpt-oss-120b",
+}
+
+# Where the Antigravity-specific opencode config + auth tokens live
+_AG_CONFIG_DIR = os.path.expanduser(
+    os.environ.get("AG_OPENCODE_CONFIG_DIR", "~/.jefe/antigravity-opencode")
+)
 
 
-class FreeCodeBaseRunner(RunnerBase):
-    name = "freecode"
-    cli_command = "freecode"
-    stall_timeout = float(os.environ.get("FREECODE_STALL_TIMEOUT_SECS", "120"))
-
-    def _configure_runtime_dirs(self, instance, env: dict[str, str]) -> None:
-        """Isolate freecode's global XDG state per instance."""
-        root = os.path.expanduser(f"~/.bridgebot/instances/{instance.id}/xdg")
-        for env_key, suffix in (
-            ("XDG_CONFIG_HOME", "config"),
-            ("XDG_DATA_HOME", "data"),
-            ("XDG_STATE_HOME", "state"),
-            ("XDG_CACHE_HOME", "cache"),
-        ):
-            path = os.path.join(root, suffix)
-            os.makedirs(path, exist_ok=True)
-            env[env_key] = path
-
-    def _configure_system_instructions(self, instance, env: dict[str, str], system_parts: list[str]) -> None:
-        """Persist per-instance instructions where freecode loads system context from."""
-        if not system_parts:
-            env.pop("FREECODE_CONFIG_DIR", None)
-            return
-
-        config_dir = os.path.expanduser(f"~/.bridgebot/instances/{instance.id}/freecode")
-        os.makedirs(config_dir, exist_ok=True)
-        with open(os.path.join(config_dir, "AGENTS.md"), "w", encoding="utf-8") as f:
-            f.write("\n\n".join(system_parts))
-        env["FREECODE_CONFIG_DIR"] = config_dir
+class AntigravityRunner(RunnerBase):
+    name = "antigravity"
+    cli_command = "opencode"
 
     def discover_binary(self) -> str:
-        """Use FREECODE_BIN_PATH if set, otherwise fall back to PATH lookup."""
         import shutil
-        custom = os.environ.get("FREECODE_BIN_PATH")
+        custom = os.environ.get("OPENCODE_BIN_PATH")
         if custom:
             expanded = os.path.expanduser(custom)
             if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
                 return expanded
-            raise FileNotFoundError(f"FREECODE_BIN_PATH={custom!r} not found or not executable")
-        path = shutil.which(self.cli_command)
+        path = shutil.which("opencode")
         if path is None:
-            raise FileNotFoundError(
-                f"{self.cli_command} CLI not found in PATH. Install from https://github.com/polancojoseph1/freecode"
-            )
+            raise FileNotFoundError("opencode CLI not found in PATH")
         return path
 
-    async def _terminate_process_group(self, proc: asyncio.subprocess.Process) -> None:
-        """Kill the detached logger process and its freecode child."""
-        if proc.returncode is not None:
-            return
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            return
-        except OSError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                return
-        try:
-            await proc.wait()
-        except ProcessLookupError:
-            pass
+    def resolve_model(self, alias: str) -> str | None:
+        """Resolve a user-supplied alias to a full Antigravity model ID."""
+        lower = alias.lower().strip()
+        if lower in _AG_MODELS:
+            return _AG_MODELS[lower]
+        # Accept full provider/model names directly
+        if "/" in alias:
+            return alias
+        return None
+
+    @property
+    def model_shortcuts(self) -> str:
+        return "pro, flash, sonnet, opus, gpt-oss"
 
     def new_session(self, instance) -> None:
-        instance.session_id = ""  # opencode assigns its own ses_... IDs
+        instance.session_id = ""
         instance.session_started = False
         instance.session_cost = 0.0
 
+    def is_available(self) -> bool:
+        try:
+            self.discover_binary()
+            return True
+        except FileNotFoundError:
+            return False
+
     async def kill_all(self) -> int:
-        return self._kill_processes("freecode run")
+        return self._kill_processes("opencode run")
 
     async def run_query(self, prompt: str, timeout: int = 120) -> str:
-        """Stateless one-shot query. No session, no memory, no progress."""
         try:
             binary = self.discover_binary()
         except FileNotFoundError:
-            return '{"error": "freecode CLI not found"}'
+            return '{"error": "opencode CLI not found"}'
 
-        env = self.build_env(dict(os.environ), True)
-        cmd = [binary, "run", "--format", "json", prompt]
+        env = self._build_ag_env(dict(os.environ), True)
+        model = os.environ.get("AG_MODEL", "google/gemini-3-flash-preview")
+        cmd = [binary, "run", "--format", "json"]
+        if model:
+            cmd += ["-m", model]
+        cmd.append(prompt)
 
         stdout_data, stderr_data, err_msg = await self._run_cmd_with_timeout(
-            cmd, float(timeout), env, "freecode"
+            cmd, float(timeout), env, "antigravity"
         )
         if err_msg:
             return err_msg
 
-        # Parse NDJSON output — collect all text events
         text_parts = []
         for line in stdout_data.decode(errors="replace").splitlines():
             line = line.strip()
@@ -123,11 +128,16 @@ class FreeCodeBaseRunner(RunnerBase):
                 if text:
                     text_parts.append(text)
             elif data.get("type") == "error":
-                err_msg = data.get("error", {}).get("data", {}).get("message", "")
-                if err_msg:
-                    return f"[error] {err_msg}"
-
+                err = data.get("error", {}).get("data", {}).get("message", "")
+                if err:
+                    return f"[error] {err}"
         return self.format_query_result(text_parts, None, stderr_data, join_char="\n\n")
+
+    def _build_ag_env(self, base_env: dict, user_is_owner: bool) -> dict:
+        env = self.build_env(base_env, user_is_owner)
+        env["OPENCODE_CONFIG_DIR"] = _AG_CONFIG_DIR
+        env["OPENCODE_CONFIG"] = os.path.join(_AG_CONFIG_DIR, "opencode.json")
+        return env
 
     async def run(
         self,
@@ -145,64 +155,38 @@ class FreeCodeBaseRunner(RunnerBase):
         try:
             binary = self.discover_binary()
         except FileNotFoundError:
-            return "\u274c Error: freecode CLI not found. Install from https://github.com/polancojoseph1/freecode"
+            return "\u274c Error: opencode CLI not found."
 
-        env = self.build_env(dict(os.environ), user_is_owner)
-        self._configure_runtime_dirs(instance, env)
+        env = self._build_ag_env(dict(os.environ), user_is_owner)
         session_started = instance.session_started
 
-        # Per-instance OpenRouter credentials (Bridge Cloud per-user keys)
-        bc_or_key = getattr(instance, "bc_openrouter_key", None)
-        if bc_or_key:
-            # Freecode's openrouter provider reads OPENROUTER_API_KEY (not OPENAI_*)
-            env["OPENROUTER_API_KEY"] = bc_or_key
-            logger.debug("[freecode] Using per-instance OpenRouter key for Bridge Cloud")
-
-        # Determine model — instance.model or env override
-        model = getattr(instance, "model", None) or os.environ.get("FREECODE_MODEL", "")
+        # Resolve model — instance.model takes priority, then env default
+        model = getattr(instance, "model", None) or os.environ.get("AG_MODEL", "google/gemini-3-flash-preview")
 
         cmd = [binary, "run", "--format", "json"]
 
-        # Custom fork: pass --steps if FREECODE_MAX_STEPS is set
-        max_steps = os.environ.get("FREECODE_MAX_STEPS") or os.environ.get("OPENCODE_MAX_STEPS")
-        if max_steps:
-            cmd += ["--steps", max_steps]
-
         if model:
-            # Freecode uses "providerID/modelID" format. OpenRouter models from v1_api.py
-            # are "org/model" style — must be prefixed with "openrouter/" so freecode
-            # routes them through the openrouter provider, not a non-existent org provider.
-            if bc_or_key and not model.startswith("openrouter/"):
-                fc_model = f"openrouter/{model}"
-            else:
-                fc_model = model
-            cmd += ["-m", fc_model]
+            cmd += ["-m", model]
 
-        # Session continuity
         if session_started and instance.session_id:
             cmd += ["--session", instance.session_id]
 
-        # Build the prompt with system context
-        system_parts = self.build_system_prompt(instance, memory_context)
-        
-        # Inject system prompt via FREECODE_CONFIG_DIR/AGENTS.md to survive compaction
-        self._configure_system_instructions(instance, env, system_parts)
-
         # Build prompt
+        system_parts = self.build_system_prompt(instance, memory_context)
+
         if image_path:
-            if message:
-                prompt = f"Look at the image file at: {image_path}\n\n{message}"
-            else:
-                prompt = f"Look at the image file at: {image_path}\n\nDescribe what you see in the image."
+            prompt = f"Look at the image file at: {image_path}\n\n{message}" if message else f"Look at the image file at: {image_path}\n\nDescribe what you see."
         else:
             prompt = message
+
+        if system_parts and not session_started:
+            prompt = "[System Instructions]\n" + "\n\n".join(system_parts) + "\n\n[User Message]\n" + prompt
 
         cmd.append(prompt)
 
         log_path = self.make_log_path(self.name, chat_id, instance.id)
         log_start_offset = os.path.getsize(log_path) if os.path.exists(log_path) else 0
 
-        # Spawn via subprocess logger wrapper (detached, survives server crashes)
         wrapper_cmd = [sys.executable, _SUBPROCESS_LOGGER, log_path] + cmd
 
         try:
@@ -212,32 +196,29 @@ class FreeCodeBaseRunner(RunnerBase):
                 stderr=asyncio.subprocess.DEVNULL,
                 env=env,
                 cwd=os.path.expanduser("~"),
-                start_new_session=True,  # detach: survives server death
+                start_new_session=True,
             )
             instance.process = proc
         except OSError as exc:
-            logger.exception("OS error running freecode")
-            return f"\u274c Error starting freecode: {exc}"
+            logger.exception("OS error running opencode/antigravity")
+            return f"\u274c Error starting Antigravity: {exc}"
 
-        # Record subprocess info for crash recovery
         instance.subprocess_pid = proc.pid
         instance.subprocess_log_file = log_path
         instance.subprocess_start_time = self.get_pid_start_time(proc.pid) or ""
         if on_subprocess_started:
             on_subprocess_started(proc.pid, log_path, instance.subprocess_start_time)
 
-        final_text_parts: list[str] = []  # noqa: F841
         _pending_text: str = ""
         _usage: dict = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
         _captured_session_id: str = ""
         _session_corrupt: bool = False
-        _last_progress_time: list[float] = [time.monotonic()]  # mutable for closure
+        _last_progress_time: list[float] = [time.monotonic()]
 
         async def _flush_text_as_progress():
             nonlocal _pending_text
             if _pending_text and on_progress:
                 text = _pending_text
-                # Strip everything from the first code block onward — keep only prose
                 for fence in ("```", "~~~"):
                     if fence in text:
                         text = text[:text.index(fence)]
@@ -251,10 +232,7 @@ class FreeCodeBaseRunner(RunnerBase):
             _any_progress_sent = False
 
             async for line, _offset in self.tail_log_file(
-                log_path,
-                start_offset=log_start_offset,
-                proc=proc,
-                stall_timeout=self.stall_timeout,
+                log_path, start_offset=log_start_offset, proc=proc
             ):
                 if not line:
                     continue
@@ -264,8 +242,6 @@ class FreeCodeBaseRunner(RunnerBase):
                     continue
 
                 event_type = data.get("type", "")
-
-                # Capture session ID from any event
                 sid = data.get("sessionID", "")
                 if sid and not _captured_session_id:
                     _captured_session_id = sid
@@ -273,12 +249,10 @@ class FreeCodeBaseRunner(RunnerBase):
                 if event_type == "text":
                     text = data.get("part", {}).get("text", "")
                     if text:
-                        # Flush previous text as progress, hold this one pending
                         await _flush_text_as_progress()
                         _pending_text = text
 
                 elif event_type == "tool_use":
-                    # Flush any pending narrative text before tool progress
                     await _flush_text_as_progress()
                     part = data.get("part", {})
                     state = part.get("state", {})
@@ -287,7 +261,7 @@ class FreeCodeBaseRunner(RunnerBase):
                     title = state.get("title", "")
 
                     if on_progress:
-                        progress = self._format_freecode_tool(tool_name, tool_input, title)
+                        progress = self._format_tool(tool_name, tool_input, title)
                         if progress:
                             _any_progress_sent = True
                             _last_progress_time[0] = time.monotonic()
@@ -309,19 +283,14 @@ class FreeCodeBaseRunner(RunnerBase):
                     err_data = data.get("error", {})
                     err_name = err_data.get("name", "Error")
                     err_msg = err_data.get("data", {}).get("message", str(err_data))
-                    logger.error("[freecode] %s: %s", err_name, err_msg)
-                    # Detect Mistral/LiteLLM tool call mismatch — session must be reset
-                    _corrupt_keywords = ("invalid_request_message_order", "not the same number of function calls")
-                    if any(k in err_msg.lower() for k in _corrupt_keywords):
+                    logger.error("[antigravity] %s: %s", err_name, err_msg)
+                    if any(k in err_msg.lower() for k in ("invalid_request_message_order", "not the same number of function calls")):
                         _session_corrupt = True
                     else:
-                        # Always surface error as final response so it isn't swallowed
                         _pending_text = f"\u274c {err_name}: {err_msg[:200]}"
                         if on_progress:
                             await on_progress(_pending_text)
 
-            if proc.returncode is None:
-                return
             await proc.wait()
 
         _keepalive_task = self.start_keepalive_task(on_progress, _last_progress_time)
@@ -329,10 +298,14 @@ class FreeCodeBaseRunner(RunnerBase):
             await asyncio.wait_for(process_stream(), timeout=self.timeout)
         except asyncio.TimeoutError:
             _keepalive_task.cancel()
-            await self._terminate_process_group(proc)
+            try:
+                proc.kill()
+                await proc.wait()
+            except ProcessLookupError:
+                pass
             instance.process = None
             self._clear_subprocess_info(instance)
-            return "\u23f0 FreeCode took too long to respond (timed out)."
+            return "\u23f0 Antigravity took too long to respond (timed out)."
         finally:
             _keepalive_task.cancel()
 
@@ -340,18 +313,8 @@ class FreeCodeBaseRunner(RunnerBase):
 
         if instance.was_stopped:
             instance.was_stopped = False
-            await self._terminate_process_group(proc)
             self._clear_subprocess_info(instance)
             return "\U0001f6d1 Stopped."
-
-        if proc.returncode is None:
-            self.new_session(instance)
-            await self._terminate_process_group(proc)
-            self._clear_subprocess_info(instance)
-            return (
-                f"\u274c FreeCode stalled with no new output for {int(self.stall_timeout)}s. "
-                "Session reset. Please resend your message."
-            )
 
         if proc.returncode == 0:
             instance.session_started = True
@@ -363,7 +326,7 @@ class FreeCodeBaseRunner(RunnerBase):
             self._clear_subprocess_info(instance)
 
         if proc.returncode != 0:
-            logger.error("freecode exited %d (see log: %s)", proc.returncode, log_path)
+            logger.error("opencode/antigravity exited %d (log: %s)", proc.returncode, log_path)
             try:
                 with open(log_path, "r", errors="replace") as _f:
                     _log_tail = _f.read()[-2000:]
@@ -371,32 +334,29 @@ class FreeCodeBaseRunner(RunnerBase):
                 _log_tail = ""
             self._clear_subprocess_info(instance)
             _log_lower = _log_tail.lower()
-            if "auth" in _log_lower or "unauthorized" in _log_lower:
-                return "\u274c FreeCode auth error. Check your API keys or run `freecode` to configure."
+            if "auth" in _log_lower or "login" in _log_lower or "unauthorized" in _log_lower:
+                return (
+                    "\u274c Antigravity auth error.\n"
+                    "Run this once in Terminal to set up:\n"
+                    "<code>OPENCODE_CONFIG_DIR=~/.jefe/antigravity-opencode opencode auth login</code>"
+                )
             if "session" in _log_lower:
                 self.new_session(instance)
-                return "\u274c Session error. New conversation started \u2014 please resend your message."
-            return "\u274c FreeCode exited with an error."
+                return "\u274c Session error. New conversation started \u2014 please resend."
+            return "\u274c Antigravity exited with an error."
 
-        # Corrupt session: tool call / response mismatch rejected by Mistral
         if _session_corrupt:
             self.new_session(instance)
-            return "\u26a0\ufe0f Session had corrupt tool call history. Session has been reset \u2014 please resend your message."
+            return "\u26a0\ufe0f Session had corrupt tool history. Reset \u2014 please resend."
 
         if _pending_text:
             return _pending_text
-        # Model completed via tool calls with no final text summary — that's fine
         if _usage.get("output_tokens", 0) > 0 or _usage.get("cost", 0.0) > 0:
             return "\u2705 Done."
-        return "(empty response from FreeCode)"
+        return "(empty response from Antigravity)"
 
     @staticmethod
-    def _format_freecode_tool(tool_name: str, tool_input: dict, title: str) -> str:
-        """Format a freecode tool call into a human-readable progress string.
-
-        FreeCode events use camelCase keys (filePath, dirPath) while some tools
-        use snake_case. We check both to ensure nothing is silently dropped.
-        """
+    def _format_tool(tool_name: str, tool_input: dict, title: str) -> str:
         name_lower = tool_name.lower()
 
         def _get(*keys: str) -> str:
@@ -408,18 +368,17 @@ class FreeCodeBaseRunner(RunnerBase):
 
         if name_lower in ("bash", "shell", "run_shell_command", "exec_command"):
             cmd = _get("command", "cmd")
-            desc = title or cmd[:200]
-            return f"\u26a1 Shell: {desc}" if desc else "\u26a1 Shell"
-        elif name_lower in ("edit", "edit_file", "write", "write_file", "apply_patch"):
+            return f"\u26a1 Shell: {title or cmd[:200]}" if (title or cmd) else "\u26a1 Shell"
+        elif name_lower in ("edit", "edit_file", "write", "write_file"):
             path = _get("filePath", "file_path", "path")
             return f"\u270f\ufe0f Edit: {path}" if path else f"\u270f\ufe0f {title or tool_name}"
         elif name_lower in ("read", "read_file"):
             path = _get("filePath", "file_path", "path")
-            return f"\U0001f4c4 Read: {path}"  if path else "\U0001f4c4 Read"
+            return f"\U0001f4c4 Read: {path}" if path else "\U0001f4c4 Read"
         elif name_lower in ("list_directory", "ls", "glob"):
             target = _get("pattern", "dirPath", "dir_path", "path")
             return f"\U0001f4c2 Glob: {target}" if target else "\U0001f4c2 List"
-        elif name_lower in ("grep", "grep_search", "search"):
+        elif name_lower in ("grep", "search"):
             query = _get("query", "pattern", "regex")
             return f"\U0001f50d Grep: {query[:80]}" if query else "\U0001f50d Search"
         elif name_lower in ("web_fetch", "fetch"):
@@ -428,8 +387,6 @@ class FreeCodeBaseRunner(RunnerBase):
         elif name_lower in ("web_search", "google_web_search"):
             query = _get("query", "search_query")
             return f"\U0001f50e Search: {query}" if query else "\U0001f50e Web search"
-        elif name_lower in ("question", "ask", "ask_followup_question", "ask_user"):
-            return ""  # interactive question — not useful as progress
         elif tool_name:
             return f"\U0001f527 {title or tool_name}"
         return ""
