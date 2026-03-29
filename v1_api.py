@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import random
+import logging
 import re
 import secrets as _secrets
 import tempfile
@@ -14,6 +15,8 @@ import uuid
 from typing import Optional, AsyncGenerator
 
 import httpx
+
+logger = logging.getLogger("bridge.v1_api")
 
 # ── Model routing pools ───────────────────────────────────────────────────────
 # Benchmarks sourced from model-arena (SWE-bench + Chatbot Arena, March 2026)
