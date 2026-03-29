@@ -70,51 +70,76 @@ async def transcribe_audio(file_path: str) -> str:
     return await loop.run_in_executor(None, _transcribe_sync, file_path)
 
 
+# Pre-compile regular expressions for TTS cleanup to improve performance
+_RE_HTML_TAGS = re.compile(r"<[^>]+>")
+_RE_CODE_BLOCKS = re.compile(r"```[\s\S]*?```")
+_RE_INLINE_CODE = re.compile(r"`([^`]*)`")
+_RE_MD_BOLD_ITALIC = re.compile(r"\*+")
+_RE_MD_HEADERS = re.compile(r"^#{1,6}\s*", flags=re.MULTILINE)
+_RE_MD_LINKS = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_RE_URLS = re.compile(r"https?://\S+")
+_RE_IPS = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?")
+_RE_TABLE_PIPES_SEP = re.compile(r"^\s*\|.*\|\s*$", flags=re.MULTILINE)
+_RE_PIPES = re.compile(r"\|")
+_RE_DASH_FLAGS = re.compile(r"--\S+")
+_RE_MULTI_DASHES = re.compile(r"-{2,}")
+_RE_LIST_MARKERS = re.compile(r"^\s*[-*•]\s+", flags=re.MULTILINE)
+_RE_NUM_LIST_MARKERS = re.compile(r"^\s*\d+\.\s+", flags=re.MULTILINE)
+_RE_EXT_PY = re.compile(r"\.py\b")
+_RE_EXT_MD = re.compile(r"\.md\b")
+_RE_EXT_TXT = re.compile(r"\.txt\b")
+_RE_EXT_JSON = re.compile(r"\.json\b")
+_RE_EXT_SH = re.compile(r"\.sh\b")
+_RE_SLASH = re.compile(r"/\b")
+_RE_BRACKETS = re.compile(r"[\[\](){}<>]")
+_RE_SYMBOLS = re.compile(r"[#@$%^&*+=~\\|/<>]")
+_RE_WHITESPACE = re.compile(r"\s+")
+
 def _clean_for_tts(text: str) -> str:
     """Strip markdown and symbols so TTS reads naturally."""
     has_code = "```" in text or "`" in text
     has_link = "http" in text
 
     # Remove HTML tags
-    text = re.sub(r"<[^>]+>", "", text)
+    text = _RE_HTML_TAGS.sub("", text)
     # Remove code blocks entirely
-    text = re.sub(r"```[\s\S]*?```", " some code ", text)
+    text = _RE_CODE_BLOCKS.sub(" some code ", text)
     # Remove inline code backticks, keep the inner text
-    text = re.sub(r"`([^`]*)`", r"\1", text)
+    text = _RE_INLINE_CODE.sub(r"\1", text)
     # Remove any remaining backticks
     text = text.replace("`", "")
     # Remove markdown bold/italic
-    text = re.sub(r"\*+", "", text)
+    text = _RE_MD_BOLD_ITALIC.sub("", text)
     # Replace underscores with space (handles __pycache__, snake_case, etc.)
     text = text.replace("_", " ")
     # Remove markdown headers
-    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = _RE_MD_HEADERS.sub("", text)
     # Markdown links: keep label only
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = _RE_MD_LINKS.sub(r"\1", text)
     # Remove bare URLs and IP addresses
-    text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?", "", text)
+    text = _RE_URLS.sub("", text)
+    text = _RE_IPS.sub("", text)
     # Remove table pipes and separator rows
-    text = re.sub(r"^\s*\|.*\|\s*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\|", " ", text)
+    text = _RE_TABLE_PIPES_SEP.sub("", text)
+    text = _RE_PIPES.sub(" ", text)
     # Remove leading dashes used as flags (--flag) or separators
-    text = re.sub(r"--\S+", "", text)
-    text = re.sub(r"-{2,}", " ", text)
+    text = _RE_DASH_FLAGS.sub("", text)
+    text = _RE_MULTI_DASHES.sub(" ", text)
     # Remove bullet/numbered list markers
-    text = re.sub(r"^\s*[-*•]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+    text = _RE_LIST_MARKERS.sub("", text)
+    text = _RE_NUM_LIST_MARKERS.sub("", text)
     # Remove file extensions from filenames so they sound natural
-    text = re.sub(r"\.py\b", " ", text)
-    text = re.sub(r"\.md\b", " ", text)
-    text = re.sub(r"\.txt\b", " ", text)
-    text = re.sub(r"\.json\b", " ", text)
-    text = re.sub(r"\.sh\b", " ", text)
-    text = re.sub(r"/\b", " ", text)
+    text = _RE_EXT_PY.sub(" ", text)
+    text = _RE_EXT_MD.sub(" ", text)
+    text = _RE_EXT_TXT.sub(" ", text)
+    text = _RE_EXT_JSON.sub(" ", text)
+    text = _RE_EXT_SH.sub(" ", text)
+    text = _RE_SLASH.sub(" ", text)
     # Remove brackets and symbols
-    text = re.sub(r"[\[\](){}<>]", " ", text)
-    text = re.sub(r"[#@$%^&*+=~\\|/<>]", " ", text)
+    text = _RE_BRACKETS.sub(" ", text)
+    text = _RE_SYMBOLS.sub(" ", text)
     # Normalize whitespace
-    text = re.sub(r"\s+", " ", text)
+    text = _RE_WHITESPACE.sub(" ", text)
     cleaned = text.strip()
 
     if not cleaned:
